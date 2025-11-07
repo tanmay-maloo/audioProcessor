@@ -1,12 +1,85 @@
 import json
 import logging
+import os
+from datetime import datetime
+from pathlib import Path
 from rest_framework import status
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from django.views.decorators.csrf import csrf_exempt
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@parser_classes([MultiPartParser, FormParser])
+def upload_wav_file(request):
+    """
+    Handle .wav audio file upload and save it with date and time.
+    
+    Expected multipart/form-data format:
+    - audio_file: .wav audio file
+    
+    Returns:
+    - JSON response with file path and details
+    """
+    try:
+        # Extract the audio file
+        audio_file = request.FILES.get('audio_file')
+        if not audio_file:
+            return Response(
+                {'error': 'Missing audio_file parameter'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validate file extension
+        if not audio_file.name.lower().endswith('.wav'):
+            return Response(
+                {'error': 'Only .wav files are allowed'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Create audio directory if it doesn't exist
+        audio_dir = Path(settings.MEDIA_ROOT) / 'audio'
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate filename with current date and time
+        # Format: audio_YYYY-MM-DD_HH-MM-SS.wav
+        current_datetime = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        filename = f"audio_{current_datetime}.wav"
+        file_path = audio_dir / filename
+        
+        # Save the file
+        with open(file_path, 'wb+') as destination:
+            for chunk in audio_file.chunks():
+                destination.write(chunk)
+        
+        logger.info(f"Audio file saved: {file_path}, size: {audio_file.size} bytes")
+        
+        # Prepare response
+        response_data = {
+            'status': 'success',
+            'message': 'Audio file uploaded successfully',
+            'file_info': {
+                'filename': filename,
+                'original_filename': audio_file.name,
+                'size': audio_file.size,
+                'saved_at': current_datetime,
+                'path': str(file_path.relative_to(settings.MEDIA_ROOT))
+            }
+        }
+        
+        return Response(response_data, status=status.HTTP_201_CREATED)
+    
+    except Exception as e:
+        logger.error(f"Error uploading audio file: {str(e)}")
+        return Response(
+            {'error': f'Internal server error: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 @csrf_exempt

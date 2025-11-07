@@ -46,6 +46,55 @@ The API will be available at `http://localhost:8000/`
 
 ## API Endpoints
 
+### POST /upload-wav
+
+Upload a .wav audio file which will be saved with the current date and time.
+
+**Content-Type:** `multipart/form-data`
+
+**Request Body:**
+
+- **audio_file** (file): .wav audio file to upload
+
+**Example using curl:**
+
+```bash
+curl -X POST http://localhost:8000/upload-wav \
+  -F 'audio_file=@your_audio.wav'
+```
+
+**Example using Python:**
+
+```python
+import requests
+
+url = 'http://localhost:8000/upload-wav'
+files = {'audio_file': open('your_audio.wav', 'rb')}
+response = requests.post(url, files=files)
+print(response.json())
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "message": "Audio file uploaded successfully",
+  "file_info": {
+    "filename": "audio_2025-11-07_14-30-45.wav",
+    "original_filename": "your_audio.wav",
+    "size": 524288,
+    "saved_at": "2025-11-07_14-30-45",
+    "path": "audio/audio_2025-11-07_14-30-45.wav"
+  }
+}
+```
+
+**Status Codes:**
+- 201: Successfully created (file uploaded)
+- 400: Bad Request (missing file or invalid file type)
+- 500: Internal Server Error
+
 ### POST /transcribe
 
 Upload an audio file with configuration metadata for transcription.
