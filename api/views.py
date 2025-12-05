@@ -3,6 +3,8 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
+import io
+from PIL import Image
 from rest_framework import status
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -277,17 +279,42 @@ def get_genai_image(request):
     - PNG image file
     """
     try:
-        # Construct the path to the image
+        # Construct the path to the original image
         image_path = Path(settings.MEDIA_ROOT) / 'image' / 'genai_response_20251109T120523Z.png'
-        
-        # Check if file exists
+
         if not image_path.exists():
             logger.error(f"Image not found at: {image_path}")
             raise Http404("Image not found")
-        
-        # Open and return the image file
-        logger.info(f"Serving image: {image_path}")
-        return FileResponse(open(image_path, 'rb'), content_type='image/png')
+
+        # Open the image and reduce it while preserving aspect ratio.
+        # Default target: ~50 KB for the 1-bit PNG output. This keeps the endpoint
+        # lightweight for ESP32 clients.
+        target_bytes = 50_000
+
+        with Image.open(image_path) as img:
+            orig_w, orig_h = img.size
+
+            # Start at original size and progressively scale down by 90% steps until size <= target
+            scale = 1.0
+            from io import BytesIO
+            reduced_buf = BytesIO()
+            while True:
+                w = max(1, int(orig_w * scale))
+                h = max(1, int(orig_h * scale))
+                # preserve aspect ratio by scaling both dims equally
+                test_img = img.resize((w, h), resample=Image.LANCZOS).convert('L')
+                bw = test_img.point(lambda p: 255 if p > 128 else 0, mode='1')
+                reduced_buf.seek(0)
+                reduced_buf.truncate(0)
+                bw.save(reduced_buf, format='PNG', bits=1)
+                size = reduced_buf.tell()
+                # stop if good or too small to reduce further
+                if size <= target_bytes or (w <= 16 or h <= 16):
+                    reduced_buf.seek(0)
+                    logger.info(f"Serving reduced image: {image_path} (w={w}, h={h}, bytes={size})")
+                    return FileResponse(reduced_buf, content_type='image/png')
+                # otherwise reduce scale and try again
+                scale = scale * 0.9
     
     except Http404:
         raise
