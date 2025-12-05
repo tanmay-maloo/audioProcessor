@@ -9,6 +9,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
+from django.http import FileResponse, Http404
 
 logger = logging.getLogger(__name__)
 
@@ -265,4 +266,32 @@ def test_api(request):
         response_data['request_info']['files'] = list(request.FILES.keys()) if request.FILES else []
     
     return Response(response_data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+def get_genai_image(request):
+    """
+    Serve the genai_response_20251109T120523Z.png image.
+    
+    Returns:
+    - PNG image file
+    """
+    try:
+        # Construct the path to the image
+        image_path = Path(settings.MEDIA_ROOT) / 'image' / 'genai_response_20251109T120523Z.png'
+        
+        # Check if file exists
+        if not image_path.exists():
+            logger.error(f"Image not found at: {image_path}")
+            raise Http404("Image not found")
+        
+        # Open and return the image file
+        logger.info(f"Serving image: {image_path}")
+        return FileResponse(open(image_path, 'rb'), content_type='image/png')
+    
+    except Http404:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving image: {str(e)}")
+        raise Http404("Error serving image")
 
