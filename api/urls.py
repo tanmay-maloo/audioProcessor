@@ -7,5 +7,6 @@ urlpatterns = [
     path('health', views.health_check, name='health'),
     path('test', views.test_api, name='test'),
     path('genai-image', views.get_genai_image, name='genai_image'),
+    path('genai-image-raw', views.get_genai_image_raw, name='genai_image_raw'),
 ]
 

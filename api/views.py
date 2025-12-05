@@ -322,3 +322,84 @@ def get_genai_image(request):
         logger.error(f"Error serving image: {str(e)}")
         raise Http404("Error serving image")
 
+
+@api_view(['GET'])
+def get_genai_image_raw(request):
+    """
+    Serve the image as pre-processed raw printer bytes.
+
+    Behavior:
+    - Loads the source PNG from media/image/
+    - Resizes to a width of 48 bytes per row (48 * 8 = 384 pixels), preserving aspect ratio
+    - Converts to 1-bit using Floyd–Steinberg dithering
+    - Optionally inverts bits with ?invert=1 (default true for many printers)
+    - Returns raw binary: row-major, packed bytes, no headers
+    """
+    try:
+        image_path = Path(settings.MEDIA_ROOT) / 'image' / 'genai_response_20251109T120523Z.png'
+        if not image_path.exists():
+            logger.error(f"Image not found at: {image_path}")
+            raise Http404("Image not found")
+
+        # Bytes per row requested by the printer
+        width_bytes = 48
+        width_px = width_bytes * 8
+
+        invert_param = request.GET.get('invert', '1')
+        invert = invert_param.lower() in ('1', 'true', 'yes')
+
+        with Image.open(image_path) as img:
+            orig_w, orig_h = img.size
+            # preserve aspect ratio: compute new height for width_px
+            new_w = width_px
+            new_h = max(1, int(orig_h * (new_w / orig_w)))
+
+            # Resize and dither (Floyd–Steinberg)
+            gray = img.resize((new_w, new_h), resample=Image.LANCZOS).convert('L')
+            bw = gray.convert('1')  # default uses Floyd–Steinberg dither
+
+            # Pack into raw bytes (MSB-first per row)
+            raw = bytearray()
+            for y in range(new_h):
+                byte = 0
+                bits = 0
+                for x in range(new_w):
+                    pixel = bw.getpixel((x, y))
+                    # pixel is 0 (black) or 255 (white)
+                    bit = 1 if pixel == 0 else 0
+                    if invert:
+                        bit ^= 1
+                    byte = (byte << 1) | bit
+                    bits += 1
+                    if bits == 8:
+                        raw.append(byte & 0xFF)
+                        byte = 0
+                        bits = 0
+                if bits > 0:
+                    byte = byte << (8 - bits)
+                    raw.append(byte & 0xFF)
+
+            # Ensure row length
+            expected_len = new_h * width_bytes
+            if len(raw) != expected_len:
+                logger.warning(f"Raw length {len(raw)} does not match expected {expected_len}; adjusting")
+                # If width_px didn't match multiple of 8 somehow, trim or pad
+                if len(raw) > expected_len:
+                    raw = raw[:expected_len]
+                else:
+                    raw.extend(b'\x00' * (expected_len - len(raw)))
+
+            buf = io.BytesIO(bytes(raw))
+            buf.seek(0)
+            resp = FileResponse(buf, content_type='application/octet-stream')
+            resp['Content-Length'] = str(len(raw))
+            resp['X-Image-Width-Bytes'] = str(width_bytes)
+            resp['X-Image-Height-Pixels'] = str(new_h)
+            return resp
+
+    except Http404:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating raw image data: {e}")
+        raise Http404("Error generating raw image data")
+
