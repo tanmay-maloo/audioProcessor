@@ -324,7 +324,7 @@ def get_genai_image(request):
 
 
 @api_view(['GET'])
-def get_genai_image_raw(request):
+def get_genai_image_raw(request, invert: int | None = None):
     """
     Serve the image as pre-processed raw printer bytes.
 
@@ -345,8 +345,12 @@ def get_genai_image_raw(request):
         width_bytes = 48
         width_px = width_bytes * 8
 
-        invert_param = request.GET.get('invert', '1')
-        invert = invert_param.lower() in ('1', 'true', 'yes')
+        # inversion can be passed either as path param or query param
+        if invert is not None:
+            invert_flag = bool(invert)
+        else:
+            invert_param = request.GET.get('invert', '1')
+            invert_flag = invert_param.lower() in ('1', 'true', 'yes')
 
         with Image.open(image_path) as img:
             orig_w, orig_h = img.size
@@ -367,7 +371,7 @@ def get_genai_image_raw(request):
                     pixel = bw.getpixel((x, y))
                     # pixel is 0 (black) or 255 (white)
                     bit = 1 if pixel == 0 else 0
-                    if invert:
+                    if invert_flag:
                         bit ^= 1
                     byte = (byte << 1) | bit
                     bits += 1
