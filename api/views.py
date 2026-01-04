@@ -252,7 +252,7 @@ def test_api(request):
     # Return success response with request info
     response_data = {
         'status': 'success',
-        'message': 'Test API endpoint hit successfully',
+        'message': 'Test API endpoint hit successfully 2',
         'request_info': {
             'method': request.method,
             'path': request.path,
