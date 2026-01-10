@@ -7,7 +7,6 @@ import threading
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-import assemblyai as aai
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -15,10 +14,23 @@ logger = logging.getLogger(__name__)
 # Load environment variables from .env file
 load_dotenv()
 
-# Configure AssemblyAI API key from environment variable
-aai.settings.api_key = os.getenv('ASSEMBLYAI_API_KEY')
-if not aai.settings.api_key:
-    logger.warning("ASSEMBLYAI_API_KEY environment variable is not set")
+# Import assemblyai lazily to handle missing dependency
+aai = None
+
+def _init_assemblyai():
+    """Initialize AssemblyAI on first use"""
+    global aai
+    if aai is None:
+        try:
+            import assemblyai as assemblyai_module
+            aai = assemblyai_module
+            # Configure AssemblyAI API key from environment variable
+            aai.settings.api_key = os.getenv('ASSEMBLYAI_API_KEY')
+            if not aai.settings.api_key:
+                logger.warning("ASSEMBLYAI_API_KEY environment variable is not set")
+        except ImportError as e:
+            logger.error(f"Failed to import assemblyai: {e}")
+            raise
 
 
 def transcribe_audio_file(audio_file_path: str, transaction_uuid: str):
@@ -33,6 +45,9 @@ def transcribe_audio_file(audio_file_path: str, transaction_uuid: str):
     from .models import Transcription  # Import here to avoid circular imports
     
     try:
+        # Initialize AssemblyAI on first use
+        _init_assemblyai()
+        
         logger.info(f"Starting transcription for UUID: {transaction_uuid}")
         
         # Update status to processing
