@@ -135,7 +135,7 @@ nano .env
 
 2. Add your AssemblyAI API key:
 ```
-ASSEMBLYAI_API_KEY=6ed3db3670864da895a85d805e4b3666
+ASSEMBLYAI_API_KEY=key
 ```
 
 3. Make sure `python-dotenv` is installed (it's in requirements.txt now)
