@@ -140,6 +140,9 @@ ASSEMBLYAI_API_KEY=key
 
 3. Make sure `python-dotenv` is installed (it's in requirements.txt now)
 
+FOR pythonanywhere: /usr/local/bin/python3.11 -m pip install --user python-dotenv
+
+
 ### Final Checklist
 
 - [ ] Installed `assemblyai` with correct pip version (pip3.10, pip3.11, etc.)
