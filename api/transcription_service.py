@@ -47,6 +47,22 @@ def transcribe_audio_file(audio_file_path: str, transaction_uuid: str):
     try:
         # Initialize AssemblyAI on first use
         _init_assemblyai()
+
+        # Ensure the API key is set on the SDK settings (double-check)
+        try:
+            api_key = os.environ.get('ASSEMBLYAI_API_KEY')
+            if api_key:
+                # set again in case the SDK didn't pick it up earlier
+                aai.settings.api_key = api_key
+        except Exception:
+            logger.exception('Failed to ensure ASSEMBLYAI_API_KEY in assemblyai settings')
+
+        # Log presence (do not log full key)
+        try:
+            key_present = bool(getattr(aai.settings, 'api_key', None))
+            logger.info(f"assemblyai loaded: {aai is not None}, api_key_present: {key_present}")
+        except Exception:
+            logger.exception('Error checking assemblyai.settings.api_key')
         
         logger.info(f"Starting transcription for UUID: {transaction_uuid}")
         
