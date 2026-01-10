@@ -90,33 +90,25 @@ def upload_wav_file(request):
 @parser_classes([MultiPartParser, FormParser])
 def transcribe_audio(request):
     """
-    Handle audio file upload with configuration metadata.
+    Handle audio file upload for transcription using AssemblyAI.
+    
+    Process:
+    1. Save the audio file similar to upload-wav
+    2. Generate a UUID for this transcription request
+    3. Store the request in the database with status 'pending'
+    4. Respond with 201 and the UUID
+    5. Start background transcription process with AssemblyAI
     
     Expected multipart/form-data format:
-    - config: JSON string with audio configuration (encoding, sampleRateHz, languageCode, audioChannelCount)
-    - audio_file: Raw audio file data
+    - audio_file: Audio file (preferably .wav, .mp3, .m4a, etc.)
     
     Returns:
-    - JSON response with transcribed text
+    - JSON response with UUID for tracking the transcription
     """
+    from .models import Transcription
+    from .transcription_service import start_transcription_async
+    
     try:
-        # Extract the config JSON from the request
-        config_data = request.POST.get('config')
-        if not config_data:
-            return Response(
-                {'error': 'Missing config parameter'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Parse the config JSON
-        try:
-            config = json.loads(config_data)
-        except json.JSONDecodeError:
-            return Response(
-                {'error': 'Invalid JSON in config parameter'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
         # Extract the audio file
         audio_file = request.FILES.get('audio_file')
         if not audio_file:
@@ -125,46 +117,110 @@ def transcribe_audio(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Log the received data
-        logger.info(f"Received audio file: {audio_file.name}, size: {audio_file.size} bytes")
-        logger.info(f"Config: {config}")
+        logger.info(f"Received audio file for transcription: {audio_file.name}, size: {audio_file.size} bytes")
         
-        # Validate config parameters
-        required_fields = ['encoding', 'sampleRateHz', 'languageCode', 'audioChannelCount']
-        missing_fields = [field for field in required_fields if field not in config]
-        if missing_fields:
-            return Response(
-                {'error': f'Missing required config fields: {", ".join(missing_fields)}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # Create audio directory if it doesn't exist
+        audio_dir = Path(settings.MEDIA_ROOT) / 'audio'
+        audio_dir.mkdir(parents=True, exist_ok=True)
         
-        # Read the audio data
-        audio_data = audio_file.read()
-        logger.info(f"Read {len(audio_data)} bytes of audio data")
+        # Generate filename with current date and time
+        # Format: audio_YYYY-MM-DD_HH-MM-SS.{extension}
+        current_datetime = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        file_extension = Path(audio_file.name).suffix or '.wav'
+        filename = f"audio_{current_datetime}{file_extension}"
+        file_path = audio_dir / filename
         
-        # Here you would typically:
-        # 1. Save the audio file if needed
-        # 2. Process the audio (e.g., send to speech-to-text service)
-        # 3. Return the transcribed text
+        # Save the file
+        with open(file_path, 'wb+') as destination:
+            for chunk in audio_file.chunks():
+                destination.write(chunk)
         
-        # For now, we'll return a mock response
-        # In production, you would integrate with a speech-to-text API
-        # such as Google Cloud Speech-to-Text, Azure Speech, or AWS Transcribe
+        logger.info(f"Audio file saved: {file_path}")
         
-        # Example of how to save the file (optional):
-        # from django.core.files.storage import default_storage
-        # file_path = default_storage.save(f'uploads/{audio_file.name}', audio_file)
-        
-        # Mock transcription response
-        transcribed_text = "this is the transcribed text"
-        
-        return Response(
-            {'text': transcribed_text},
-            status=status.HTTP_200_OK
+        # Create transcription record in database
+        transcription = Transcription.objects.create(
+            audio_filename=filename,
+            audio_file_path=str(file_path),
+            status='pending'
         )
+        
+        logger.info(f"Created transcription request with UUID: {transcription.uuid}")
+        
+        # Start background transcription
+        start_transcription_async(str(file_path), str(transcription.uuid))
+        
+        # Prepare response
+        response_data = {
+            'status': 'success',
+            'message': 'Audio file uploaded successfully. Transcription in progress.',
+            'uuid': str(transcription.uuid),
+            'file_info': {
+                'filename': filename,
+                'original_filename': audio_file.name,
+                'size': audio_file.size,
+                'saved_at': current_datetime,
+            }
+        }
+        
+        return Response(response_data, status=status.HTTP_201_CREATED)
     
     except Exception as e:
-        logger.error(f"Error processing audio upload: {str(e)}")
+        logger.error(f"Error processing transcription request: {str(e)}")
+        return Response(
+            {'error': f'Internal server error: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+def get_transcription_status(request, uuid):
+    """
+    Get the status and result of a transcription request by UUID.
+    
+    Args:
+        uuid: UUID of the transcription request
+    
+    Returns:
+        JSON response with:
+        - uuid: The transcription UUID
+        - status: pending, processing, completed, or failed
+        - transcribed_text: The transcribed text (if completed)
+        - error_message: Error message (if failed)
+        - created_at: When the request was created
+        - updated_at: When the status was last updated
+    """
+    from .models import Transcription
+    
+    try:
+        # Get transcription by UUID
+        transcription = Transcription.objects.get(uuid=uuid)
+        
+        # Prepare response data
+        response_data = {
+            'uuid': str(transcription.uuid),
+            'status': transcription.status,
+            'audio_filename': transcription.audio_filename,
+            'created_at': transcription.created_at.isoformat(),
+            'updated_at': transcription.updated_at.isoformat(),
+        }
+        
+        # Add transcribed text if completed
+        if transcription.status == 'completed' and transcription.transcribed_text:
+            response_data['transcribed_text'] = transcription.transcribed_text
+        
+        # Add error message if failed
+        if transcription.status == 'failed' and transcription.error_message:
+            response_data['error_message'] = transcription.error_message
+        
+        return Response(response_data, status=status.HTTP_200_OK)
+    
+    except Transcription.DoesNotExist:
+        return Response(
+            {'error': f'Transcription with UUID {uuid} not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Error retrieving transcription status: {str(e)}")
         return Response(
             {'error': f'Internal server error: {str(e)}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
