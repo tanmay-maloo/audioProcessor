@@ -15,7 +15,6 @@ class ApiConfig(AppConfig):
         # listener twice due to Django's autoreloader.
         try:
             if 'runserver' in sys.argv and os.environ.get('RUN_MAIN') == 'true':
-                from .udp_listener import start_udp_listener_in_thread
 
                 # Default bind address
                 ip = '0.0.0.0'
@@ -42,8 +41,6 @@ class ApiConfig(AppConfig):
                 if port is None:
                     port = getattr(settings, 'RUNSERVER_PORT', 8000)
 
-                # Start a background UDP listener bound to the same numeric port
-                start_udp_listener_in_thread(ip=ip, port=port)
         except Exception:
             logging.getLogger(__name__).exception('Failed to start UDP listener in AppConfig.ready()')
 

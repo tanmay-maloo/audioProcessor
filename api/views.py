@@ -723,6 +723,7 @@ def get_genai_image_raw(request, invert: int | None = None):
         raise Http404("Error generating raw image data")
 
 
+@api_view(['GET'])
 def get_image_by_uuid(request, uuid):
     """
     Get the generated image data for a transcription by UUID.
@@ -736,7 +737,6 @@ def get_image_by_uuid(request, uuid):
     - 'raw' format: Binary raw data for printer
     """
     from .models import Transcription
-    from django.http import JsonResponse
     
     try:
         # Log incoming request path and query parameters for debugging
@@ -749,21 +749,21 @@ def get_image_by_uuid(request, uuid):
             transcription = Transcription.objects.get(uuid=uuid)
         except Transcription.DoesNotExist:
             logger.warning(f"Transcription not found for UUID: {uuid}")
-            return JsonResponse(
+            return Response(
                 {'error': 'Transcription not found'},
-                status=404
+                status=status.HTTP_404_NOT_FOUND
             )
         
         # Check if image has been generated
         if not transcription.image_path or not transcription.image_raw:
-            return JsonResponse(
+            return Response(
                 {
                     'error': 'Image not yet generated',
                     'uuid': str(uuid),
                     'status': transcription.status,
                     'message': 'Image generation may still be in progress or failed'
                 },
-                status=202
+                status=status.HTTP_202_ACCEPTED
             )
         
         # Determine the requested format (treat empty value as default 'file')
@@ -810,22 +810,23 @@ def get_image_by_uuid(request, uuid):
             return resp
         
         else:
-            return JsonResponse(
+            return Response(
                 {
                     'error': f'Unknown format: {requested_format}',
                     'supported_formats': ['file', 'raw', 'png']
                 },
-                status=400
+                status=status.HTTP_400_BAD_REQUEST
             )
     
     except Exception as e:
         logger.error(f"Error retrieving image for UUID {uuid}: {e}")
-        return JsonResponse(
+        return Response(
             {'error': 'Internal server error'},
-            status=500
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 
+@api_view(['GET'])
 def get_transcription_image_info(request, uuid):
     """
     Get information about the generated image for a transcription.
@@ -834,16 +835,15 @@ def get_transcription_image_info(request, uuid):
     - Image path, raw data size, transcribed text, and generation status
     """
     from .models import Transcription
-    from django.http import JsonResponse
     
     try:
         try:
             transcription = Transcription.objects.get(uuid=uuid)
         except Transcription.DoesNotExist:
             logger.warning(f"Transcription not found for UUID: {uuid}")
-            return JsonResponse(
+            return Response(
                 {'error': 'Transcription not found'},
-                status=404
+                status=status.HTTP_404_NOT_FOUND
             )
         
         image_raw_size = len(transcription.image_raw) if transcription.image_raw else 0
@@ -862,11 +862,11 @@ def get_transcription_image_info(request, uuid):
         if transcription.error_message:
             response_data['error_message'] = transcription.error_message
         
-        return JsonResponse(response_data, status=200)
+        return Response(response_data, status=status.HTTP_200_OK)
     
     except Exception as e:
         logger.error(f"Error retrieving image info for UUID {uuid}: {e}")
-        return JsonResponse(
+        return Response(
             {'error': 'Internal server error'},
-            status=500
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

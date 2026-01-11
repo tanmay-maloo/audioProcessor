@@ -36,7 +36,7 @@ def _init_genai():
             raise
 
 
-def create_and_save_image(text_subject: str, output_dir: str = None) -> tuple:
+def create_and_save_image(text_subject: str, output_dir: str = None, model_name: str = None) -> tuple:
     """
     Generate an image from text using Google Generative AI and save it locally.
     Also returns the raw image data for the printer.
@@ -44,6 +44,7 @@ def create_and_save_image(text_subject: str, output_dir: str = None) -> tuple:
     Args:
         text_subject: The subject/description for the image
         output_dir: Directory to save the image (defaults to media/image/)
+        model_name: Specific model to use (defaults to gemini-2.5-flash-image-preview)
     
     Returns:
         tuple: (image_path, image_raw_data) where:
@@ -59,6 +60,9 @@ def create_and_save_image(text_subject: str, output_dir: str = None) -> tuple:
         _init_genai()
         
         logger.info(f"Starting image generation for subject: {text_subject}")
+        
+        # Record API call start time
+        api_start_time = datetime.utcnow()
         
         # Prepare the image generation prompt
         image_generation_prompt = (
@@ -76,14 +80,33 @@ def create_and_save_image(text_subject: str, output_dir: str = None) -> tuple:
             "multiple subjects, small subject, too much white space, empty background"
         )
         
-        # Use Gemini 2.5 Flash for image generation
-        model = genai.GenerativeModel('models/gemini-2.5-flash-image-preview')
+        # Use specified model or get from environment or default
+        if model_name is None:
+            model_name = os.getenv('GEMINI_IMAGE_MODEL', 'models/gemini-2.5-flash-image-preview')
+        
+        logger.info(f"Using model: {model_name}")
+        
+        model = genai.GenerativeModel(
+            model_name,
+            generation_config=genai.GenerationConfig(
+                temperature=0.7,  # Slightly lower for faster generation
+                max_output_tokens=2048,  # Limit output tokens for speed
+            )
+        )
         
         # Create the full prompt with negative examples
         full_prompt = f"{image_generation_prompt}\n\nNegative: {negative_prompt}"
         
         logger.info("Sending prompt to Gemini API for image generation")
         response = model.generate_content(full_prompt)
+        
+        # Record API call end time
+        api_end_time = datetime.utcnow()
+        api_duration = (api_end_time - api_start_time).total_seconds()
+        logger.info(f"Gemini API call completed in {api_duration:.2f}s")
+        
+        # Record image processing start time
+        processing_start_time = datetime.utcnow()
         
         # Extract image data from response
         image_data = None
@@ -125,6 +148,14 @@ def create_and_save_image(text_subject: str, output_dir: str = None) -> tuple:
         if not image_data:
             raise Exception("No image data found in API response")
         
+        # Record image processing end time
+        processing_end_time = datetime.utcnow()
+        processing_duration = (processing_end_time - processing_start_time).total_seconds()
+        logger.info(f"Image data extraction completed in {processing_duration:.2f}s")
+        
+        # Record file save start time
+        save_start_time = datetime.utcnow()
+        
         # Save image to disk
         if output_dir is None:
             output_dir = Path(settings.MEDIA_ROOT) / 'image'
@@ -142,10 +173,23 @@ def create_and_save_image(text_subject: str, output_dir: str = None) -> tuple:
         with open(image_path, 'wb') as f:
             f.write(image_data)
         
+        # Record file save end time
+        save_end_time = datetime.utcnow()
+        save_duration = (save_end_time - save_start_time).total_seconds()
+        
         logger.info(f"Saved generated image to: {image_path}")
+        logger.info(f"File save completed in {save_duration:.2f}s")
         
         # Generate raw image data for printer
+        raw_start_time = datetime.utcnow()
         image_raw_data = _generate_raw_image_data(image_path)
+        raw_end_time = datetime.utcnow()
+        raw_duration = (raw_end_time - raw_start_time).total_seconds()
+        
+        # Log detailed breakdown
+        total_duration = (raw_end_time - api_start_time).total_seconds()
+        logger.info(f"Raw image processing completed in {raw_duration:.2f}s")
+        logger.info(f"Image generation breakdown - API: {api_duration:.2f}s, Processing: {processing_duration:.2f}s, Save: {save_duration:.2f}s, Raw: {raw_duration:.2f}s, Total: {total_duration:.2f}s")
         
         return str(image_path), image_raw_data
     
@@ -174,6 +218,9 @@ def _generate_raw_image_data(image_path: str) -> bytes:
     
     try:
         logger.info(f"Generating raw image data from: {image_path}")
+        
+        # Record raw processing start time
+        start_time = datetime.utcnow()
         
         with Image.open(image_path) as img:
             # Bytes per row requested by the printer
@@ -221,6 +268,12 @@ def _generate_raw_image_data(image_path: str) -> bytes:
                     raw.extend(b'\x00' * (expected_len - len(raw)))
             
             logger.info(f"Generated raw image data: {len(raw)} bytes ({new_w}x{new_h} pixels)")
+            
+            # Record and log processing time
+            end_time = datetime.utcnow()
+            duration = (end_time - start_time).total_seconds()
+            logger.info(f"Raw image data generation took {duration:.2f}s")
+            
             return bytes(raw)
     
     except Exception as e:
