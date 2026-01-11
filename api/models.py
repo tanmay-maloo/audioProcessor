@@ -43,6 +43,17 @@ class Transcription(models.Model):
         null=True,
         help_text="Error message if transcription failed"
     )
+    image_path = models.CharField(
+        max_length=512,
+        blank=True,
+        null=True,
+        help_text="Full path to the generated image file"
+    )
+    image_raw = models.BinaryField(
+        blank=True,
+        null=True,
+        help_text="Raw binary data for the processed image"
+    )
     created_at = models.DateTimeField(
         auto_now_add=True,
         help_text="When the transcription request was created"

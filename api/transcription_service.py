@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 from django.conf import settings
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,9 @@ def transcribe_audio_file(audio_file_path: str, transaction_uuid: str):
             transcription.transcribed_text = transcript.text
             transcription.save()
             
+            # Start image generation with transcribed text as subject
+            _generate_image_from_transcription(transcription)
+            
     except Exception as e:
         logger.error(f"Error during transcription for {transaction_uuid}: {str(e)}")
         try:
@@ -118,4 +122,48 @@ def start_transcription_async(audio_file_path: str, transaction_uuid: str):
     )
     thread.start()
     logger.info(f"Started background transcription thread for UUID: {transaction_uuid}")
+
+
+def _generate_image_from_transcription(transcription):
+    """
+    Generate an image from the transcribed text and save it.
+    This is called after transcription is completed.
+    
+    Args:
+        transcription: Transcription model instance
+    """
+    try:
+        from .image_service import create_and_save_image
+        
+        logger.info(f"Starting image generation for transcription {transcription.uuid}")
+        
+        # Generate image with transcribed text as subject
+        image_path, image_raw_data = create_and_save_image(transcription.transcribed_text)
+        
+        # Save image path and raw data to the transcription record
+        transcription.image_path = image_path
+        transcription.image_raw = image_raw_data
+        transcription.save()
+        
+        logger.info(f"Image generation completed for {transcription.uuid}, saved to {image_path}")
+        # Log total time from audio upload (created_at) to image saved
+        try:
+            if transcription.created_at:
+                elapsed = timezone.now() - transcription.created_at
+                logger.info(
+                    f"Total time from audio upload to image stored for {transcription.uuid}: {elapsed.total_seconds():.2f}s"
+                )
+        except Exception:
+            logger.exception("Failed to compute elapsed time for image generation")
+        
+    except Exception as e:
+        logger.error(f"Error during image generation for {transcription.uuid}: {str(e)}")
+        # Update error message but keep transcription as completed
+        # since the transcription part itself was successful
+        try:
+            transcription.error_message = f"Transcription completed but image generation failed: {str(e)}"
+            transcription.save()
+        except Exception as save_error:
+            logger.error(f"Failed to update transcription with image generation error: {str(save_error)}")
+
 

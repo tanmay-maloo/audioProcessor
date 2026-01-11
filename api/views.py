@@ -722,3 +722,151 @@ def get_genai_image_raw(request, invert: int | None = None):
         logger.error(f"Error generating raw image data: {e}")
         raise Http404("Error generating raw image data")
 
+
+def get_image_by_uuid(request, uuid):
+    """
+    Get the generated image data for a transcription by UUID.
+    
+    Parameters:
+    - uuid: UUID of the transcription request
+    - format: 'raw' for binary data, 'file' for PNG image (default: 'file')
+    
+    Returns:
+    - 'file' format: PNG image file
+    - 'raw' format: Binary raw data for printer
+    """
+    from .models import Transcription
+    from django.http import JsonResponse
+    
+    try:
+        # Log incoming request path and query parameters for debugging
+        try:
+            logger.info(f"get_image_by_uuid called for path={request.path} query={request.GET.dict()}")
+        except Exception:
+            logger.exception("Failed to log request info in get_image_by_uuid")
+        # Get the transcription record
+        try:
+            transcription = Transcription.objects.get(uuid=uuid)
+        except Transcription.DoesNotExist:
+            logger.warning(f"Transcription not found for UUID: {uuid}")
+            return JsonResponse(
+                {'error': 'Transcription not found'},
+                status=404
+            )
+        
+        # Check if image has been generated
+        if not transcription.image_path or not transcription.image_raw:
+            return JsonResponse(
+                {
+                    'error': 'Image not yet generated',
+                    'uuid': str(uuid),
+                    'status': transcription.status,
+                    'message': 'Image generation may still be in progress or failed'
+                },
+                status=202
+            )
+        
+        # Determine the requested format (treat empty value as default 'file')
+        requested_format = request.GET.get('format', 'file')
+        if requested_format is None or requested_format == '':
+            requested_format = 'file'
+        requested_format = requested_format.lower()
+        
+        if requested_format == 'raw':
+            # Return raw binary data
+            logger.info(f"Serving raw image data for UUID: {uuid}")
+            image_raw = transcription.image_raw
+            
+            buf = io.BytesIO(image_raw)
+            buf.seek(0)
+            resp = FileResponse(buf, content_type='application/octet-stream')
+            resp['Content-Length'] = str(len(image_raw))
+            resp['X-Image-UUID'] = str(uuid)
+            resp['Content-Disposition'] = f'attachment; filename="image_raw_{uuid}.bin"'
+            return resp
+        
+        elif requested_format == 'file' or requested_format == 'png':
+            # Return PNG image file
+            logger.info(f"Serving PNG image file for UUID: {uuid}")
+            image_path = Path(transcription.image_path)
+            
+            if not image_path.exists():
+                logger.error(f"Image file not found at: {image_path}")
+                return Response(
+                    {'error': 'Image file not found on disk'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Open and serve the image
+            with open(image_path, 'rb') as f:
+                image_data = f.read()
+            
+            buf = io.BytesIO(image_data)
+            buf.seek(0)
+            resp = FileResponse(buf, content_type='image/png')
+            resp['Content-Length'] = str(len(image_data))
+            resp['X-Image-UUID'] = str(uuid)
+            resp['Content-Disposition'] = f'inline; filename="{image_path.name}"'
+            return resp
+        
+        else:
+            return JsonResponse(
+                {
+                    'error': f'Unknown format: {requested_format}',
+                    'supported_formats': ['file', 'raw', 'png']
+                },
+                status=400
+            )
+    
+    except Exception as e:
+        logger.error(f"Error retrieving image for UUID {uuid}: {e}")
+        return JsonResponse(
+            {'error': 'Internal server error'},
+            status=500
+        )
+
+
+def get_transcription_image_info(request, uuid):
+    """
+    Get information about the generated image for a transcription.
+    
+    Returns:
+    - Image path, raw data size, transcribed text, and generation status
+    """
+    from .models import Transcription
+    from django.http import JsonResponse
+    
+    try:
+        try:
+            transcription = Transcription.objects.get(uuid=uuid)
+        except Transcription.DoesNotExist:
+            logger.warning(f"Transcription not found for UUID: {uuid}")
+            return JsonResponse(
+                {'error': 'Transcription not found'},
+                status=404
+            )
+        
+        image_raw_size = len(transcription.image_raw) if transcription.image_raw else 0
+        
+        response_data = {
+            'uuid': str(uuid),
+            'status': transcription.status,
+            'transcribed_text': transcription.transcribed_text,
+            'has_image': bool(transcription.image_path and transcription.image_raw),
+            'image_path': transcription.image_path,
+            'image_raw_size': image_raw_size,
+            'created_at': transcription.created_at.isoformat() if transcription.created_at else None,
+            'updated_at': transcription.updated_at.isoformat() if transcription.updated_at else None,
+        }
+        
+        if transcription.error_message:
+            response_data['error_message'] = transcription.error_message
+        
+        return JsonResponse(response_data, status=200)
+    
+    except Exception as e:
+        logger.error(f"Error retrieving image info for UUID {uuid}: {e}")
+        return JsonResponse(
+            {'error': 'Internal server error'},
+            status=500
+        )
