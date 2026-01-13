@@ -13,6 +13,6 @@ urlpatterns = [
     path('test', views.test_api, name='test'),
     path('genai-image', views.get_genai_image, name='genai_image'),
     path('genai-image-raw', views.get_genai_image_raw, name='genai_image_raw'),
-    path('genai-image-raw/<int:invert>/', views.get_genai_image_raw, name='genai_image_raw_invert'),
+    path('genai-image-raw/<int:invert>', views.get_genai_image_raw, name='genai_image_raw_invert'),
 ]
 
