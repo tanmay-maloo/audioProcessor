@@ -726,24 +726,21 @@ def get_genai_image_raw(request, invert: int | None = None):
 @api_view(['GET'])
 def get_image_by_uuid(request, uuid):
     """
-    Get the generated image data for a transcription by UUID.
+    Get the PNG image file for a transcription by UUID.
     
     Parameters:
     - uuid: UUID of the transcription request
-    - format: 'raw' for binary data, 'file' for PNG image (default: 'file')
     
     Returns:
-    - 'file' format: PNG image file
-    - 'raw' format: Binary raw data for printer
+    - PNG image file
+    
+    Note: For raw binary data, use the /image-raw/<uuid> endpoint instead.
     """
     from .models import Transcription
     
     try:
-        # Log incoming request path and query parameters for debugging
-        try:
-            logger.info(f"get_image_by_uuid called for path={request.path} query={request.GET.dict()}")
-        except Exception:
-            logger.exception("Failed to log request info in get_image_by_uuid")
+        logger.info(f"🔍 get_image_by_uuid ENTRY: uuid={uuid}")
+        
         # Get the transcription record
         try:
             transcription = Transcription.objects.get(uuid=uuid)
@@ -766,60 +763,97 @@ def get_image_by_uuid(request, uuid):
                 status=status.HTTP_202_ACCEPTED
             )
         
-        # Determine the requested format (treat empty value as default 'file')
-        requested_format = request.GET.get('format', 'file')
-        if requested_format is None or requested_format == '':
-            requested_format = 'file'
-        requested_format = requested_format.lower()
+        # Return PNG image file
+        logger.info(f"Serving PNG image file for UUID: {uuid}")
+        image_path = Path(transcription.image_path)
         
-        if requested_format == 'raw':
-            # Return raw binary data
-            logger.info(f"Serving raw image data for UUID: {uuid}")
-            image_raw = transcription.image_raw
-            
-            buf = io.BytesIO(image_raw)
-            buf.seek(0)
-            resp = FileResponse(buf, content_type='application/octet-stream')
-            resp['Content-Length'] = str(len(image_raw))
-            resp['X-Image-UUID'] = str(uuid)
-            resp['Content-Disposition'] = f'attachment; filename="image_raw_{uuid}.bin"'
-            return resp
-        
-        elif requested_format == 'file' or requested_format == 'png':
-            # Return PNG image file
-            logger.info(f"Serving PNG image file for UUID: {uuid}")
-            image_path = Path(transcription.image_path)
-            
-            if not image_path.exists():
-                logger.error(f"Image file not found at: {image_path}")
-                return Response(
-                    {'error': 'Image file not found on disk'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-            
-            # Open and serve the image
-            with open(image_path, 'rb') as f:
-                image_data = f.read()
-            
-            buf = io.BytesIO(image_data)
-            buf.seek(0)
-            resp = FileResponse(buf, content_type='image/png')
-            resp['Content-Length'] = str(len(image_data))
-            resp['X-Image-UUID'] = str(uuid)
-            resp['Content-Disposition'] = f'inline; filename="{image_path.name}"'
-            return resp
-        
-        else:
+        if not image_path.exists():
+            logger.error(f"Image file not found at: {image_path}")
             return Response(
-                {
-                    'error': f'Unknown format: {requested_format}',
-                    'supported_formats': ['file', 'raw', 'png']
-                },
-                status=status.HTTP_400_BAD_REQUEST
+                {'error': 'Image file not found on disk'},
+                status=status.HTTP_404_NOT_FOUND
             )
+        
+        # Open and serve the image
+        with open(image_path, 'rb') as f:
+            image_data = f.read()
+        
+        buf = io.BytesIO(image_data)
+        buf.seek(0)
+        resp = FileResponse(buf, content_type='image/png')
+        resp['Content-Length'] = str(len(image_data))
+        resp['X-Image-UUID'] = str(uuid)
+        resp['Content-Disposition'] = f'inline; filename="{image_path.name}"'
+        return resp
     
     except Exception as e:
         logger.error(f"Error retrieving image for UUID {uuid}: {e}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
+    except Exception as e:
+        logger.error(f"Error retrieving image for UUID {uuid}: {e}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+def get_image_raw_by_uuid(request, uuid):
+    """
+    Get the raw binary image data for a transcription by UUID.
+    This is a dedicated endpoint for raw format, avoiding query parameter issues.
+    
+    Parameters:
+    - uuid: UUID of the transcription request
+    
+    Returns:
+    - Binary raw data for printer
+    """
+    from .models import Transcription
+    
+    try:
+        logger.info(f"🔍 get_image_raw_by_uuid ENTRY: uuid={uuid}")
+        
+        # Get the transcription record
+        try:
+            transcription = Transcription.objects.get(uuid=uuid)
+        except Transcription.DoesNotExist:
+            logger.warning(f"Transcription not found for UUID: {uuid}")
+            return Response(
+                {'error': 'Transcription not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Check if image has been generated
+        if not transcription.image_path or not transcription.image_raw:
+            return Response(
+                {
+                    'error': 'Image not yet generated',
+                    'uuid': str(uuid),
+                    'status': transcription.status,
+                    'message': 'Image generation may still be in progress or failed'
+                },
+                status=status.HTTP_202_ACCEPTED
+            )
+        
+        # Return raw binary data
+        logger.info(f"Serving raw image data for UUID: {uuid}")
+        image_raw = transcription.image_raw
+        
+        buf = io.BytesIO(image_raw)
+        buf.seek(0)
+        resp = FileResponse(buf, content_type='application/octet-stream')
+        resp['Content-Length'] = str(len(image_raw))
+        resp['X-Image-UUID'] = str(uuid)
+        resp['Content-Disposition'] = f'attachment; filename="image_raw_{uuid}.bin"'
+        return resp
+    
+    except Exception as e:
+        logger.error(f"Error retrieving raw image for UUID {uuid}: {e}")
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

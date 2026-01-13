@@ -42,11 +42,6 @@ INSTALLED_APPS = [
     'api',
 ]
 
-# Prevent CommonMiddleware from appending slashes and redirecting which can
-# sometimes drop querystrings when a redirect occurs. We prefer explicit
-# route matching for `/image/<uuid>` and want query params preserved.
-APPEND_SLASH = False
-
 MIDDLEWARE = [
     # Request logger middleware (development only) — logs path and querystring
     'api.middleware.request_logger.RequestLoggerMiddleware',
