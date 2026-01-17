@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 import io
+import uuid as uuid_module
 from PIL import Image
 from rest_framework import status
 from rest_framework.decorators import api_view, parser_classes
@@ -14,6 +15,32 @@ from django.conf import settings
 from django.http import FileResponse, Http404
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_uuid(uuid_str):
+    """
+    Convert UUID string to standard format with hyphens.
+    Handles both formats: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' and 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+    """
+    if isinstance(uuid_str, uuid_module.UUID):
+        return str(uuid_str)
+    
+    # Remove any existing hyphens and convert to lowercase
+    clean_uuid = str(uuid_str).replace('-', '').lower()
+    
+    # Validate length
+    if len(clean_uuid) != 32:
+        raise ValueError(f"Invalid UUID format: {uuid_str}")
+    
+    # Add hyphens in standard positions
+    formatted_uuid = f"{clean_uuid[:8]}-{clean_uuid[8:12]}-{clean_uuid[12:16]}-{clean_uuid[16:20]}-{clean_uuid[20:]}"
+    
+    # Validate it's a proper UUID
+    try:
+        uuid_module.UUID(formatted_uuid)
+        return formatted_uuid
+    except ValueError:
+        raise ValueError(f"Invalid UUID format: {uuid_str}")
 
 
 @csrf_exempt
@@ -178,7 +205,7 @@ def get_transcription_status(request, uuid):
     Get the status and result of a transcription request by UUID.
     
     Args:
-        uuid: UUID of the transcription request
+        uuid: UUID of the transcription request (with or without hyphens)
     
     Returns:
         JSON response with:
@@ -192,8 +219,11 @@ def get_transcription_status(request, uuid):
     from .models import Transcription
     
     try:
+        # Normalize UUID format
+        normalized_uuid = normalize_uuid(uuid)
+        
         # Get transcription by UUID
-        transcription = Transcription.objects.get(uuid=uuid)
+        transcription = Transcription.objects.get(uuid=normalized_uuid)
         
         # Prepare response data
         response_data = {
@@ -214,6 +244,11 @@ def get_transcription_status(request, uuid):
         
         return Response(response_data, status=status.HTTP_200_OK)
     
+    except ValueError as e:
+        return Response(
+            {'error': f'Invalid UUID format: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
     except Transcription.DoesNotExist:
         return Response(
             {'error': f'Transcription with UUID {uuid} not found'},
@@ -631,7 +666,7 @@ def get_genai_image_raw(request, invert: int | None = None):
     - Returns raw binary: row-major, packed bytes, no headers
     """
     try:
-        image_path = Path(settings.MEDIA_ROOT) / 'image' / 'genai_response_20251109T120523Z.png'
+        image_path = Path(settings.MEDIA_ROOT) / 'image' / 'genai_response_20260113T214501Z.png'
         if not image_path.exists():
             logger.error(f"Image not found at: {image_path}")
             raise Http404("Image not found")
@@ -729,7 +764,7 @@ def get_image_by_uuid(request, uuid):
     Get the PNG image file for a transcription by UUID.
     
     Parameters:
-    - uuid: UUID of the transcription request
+    - uuid: UUID of the transcription request (with or without hyphens)
     
     Returns:
     - PNG image file
@@ -741,9 +776,12 @@ def get_image_by_uuid(request, uuid):
     try:
         logger.info(f"🔍 get_image_by_uuid ENTRY: uuid={uuid}")
         
+        # Normalize UUID format
+        normalized_uuid = normalize_uuid(uuid)
+        
         # Get the transcription record
         try:
-            transcription = Transcription.objects.get(uuid=uuid)
+            transcription = Transcription.objects.get(uuid=normalized_uuid)
         except Transcription.DoesNotExist:
             logger.warning(f"Transcription not found for UUID: {uuid}")
             return Response(
@@ -786,6 +824,11 @@ def get_image_by_uuid(request, uuid):
         resp['Content-Disposition'] = f'inline; filename="{image_path.name}"'
         return resp
     
+    except ValueError as e:
+        return Response(
+            {'error': f'Invalid UUID format: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
     except Exception as e:
         logger.error(f"Error retrieving image for UUID {uuid}: {e}")
         return Response(
@@ -808,7 +851,13 @@ def get_image_raw_by_uuid(request, uuid):
     This is a dedicated endpoint for raw format, avoiding query parameter issues.
     
     Parameters:
-    - uuid: UUID of the transcription request
+    - uuid: UUID of the transcription request (with or without hyphens)
+    
+    Query Parameters:
+    - regenerate: Set to '1' to regenerate raw data from PNG (for debugging)
+    - invert: Set to '0' to disable bit inversion (default '1')
+    - wrap: Set to '1' to wrap with printer commands (default '0')
+    - energy: Energy level for printer commands (default 0xffff)
     
     Returns:
     - Binary raw data for printer
@@ -818,9 +867,12 @@ def get_image_raw_by_uuid(request, uuid):
     try:
         logger.info(f"🔍 get_image_raw_by_uuid ENTRY: uuid={uuid}")
         
+        # Normalize UUID format
+        normalized_uuid = normalize_uuid(uuid)
+        
         # Get the transcription record
         try:
-            transcription = Transcription.objects.get(uuid=uuid)
+            transcription = Transcription.objects.get(uuid=normalized_uuid)
         except Transcription.DoesNotExist:
             logger.warning(f"Transcription not found for UUID: {uuid}")
             return Response(
@@ -829,7 +881,7 @@ def get_image_raw_by_uuid(request, uuid):
             )
         
         # Check if image has been generated
-        if not transcription.image_path or not transcription.image_raw:
+        if not transcription.image_path:
             return Response(
                 {
                     'error': 'Image not yet generated',
@@ -840,18 +892,108 @@ def get_image_raw_by_uuid(request, uuid):
                 status=status.HTTP_202_ACCEPTED
             )
         
-        # Return raw binary data
-        logger.info(f"Serving raw image data for UUID: {uuid}")
-        image_raw = transcription.image_raw
+        # Check if we should regenerate raw data (for debugging)
+        regenerate = request.GET.get('regenerate', '0').lower() in ('1', 'true', 'yes')
+        
+        if regenerate or not transcription.image_raw:
+            logger.info(f"Regenerating raw image data for UUID: {uuid}")
+            
+            # Process the image the same way as genai-image-raw
+            image_path = Path(transcription.image_path)
+            if not image_path.exists():
+                logger.error(f"Image file not found at: {image_path}")
+                return Response(
+                    {'error': 'Image file not found on disk'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Get parameters
+            invert_param = request.GET.get('invert', '1')
+            invert_flag = invert_param.lower() in ('1', 'true', 'yes')
+            
+            # Bytes per row requested by the printer
+            width_bytes = 48
+            width_px = width_bytes * 8
+            
+            with Image.open(image_path) as img:
+                orig_w, orig_h = img.size
+                # preserve aspect ratio: compute new height for width_px
+                new_w = width_px
+                new_h = max(1, int(orig_h * (new_w / orig_w)))
+
+                # Resize and dither (Floyd–Steinberg)
+                gray = img.resize((new_w, new_h), resample=Image.LANCZOS).convert('L')
+                bw = gray.convert('1')  # default uses Floyd–Steinberg dither
+
+                # Pack into raw bytes (LSB-first per row)
+                raw = bytearray()
+                for y in range(new_h):
+                    byte = 0
+                    bits = 0
+                    for x in range(new_w):
+                        pixel = bw.getpixel((x, y))
+                        # pixel is 0 (black) or 255 (white)
+                        bit = 1 if pixel == 0 else 0
+                        if invert_flag:
+                            bit ^= 1
+                        # LSB-first: place bit at current bit position (0..7)
+                        byte |= (bit << bits)
+                        bits += 1
+                        if bits == 8:
+                            raw.append(byte & 0xFF)
+                            byte = 0
+                            bits = 0
+                    if bits > 0:
+                        # leftover bits are already in low-order positions; pad high bits with 0
+                        raw.append(byte & 0xFF)
+
+                # Ensure row length
+                expected_len = new_h * width_bytes
+                if len(raw) != expected_len:
+                    logger.warning(f"Raw length {len(raw)} does not match expected {expected_len}; adjusting")
+                    # If width_px didn't match multiple of 8 somehow, trim or pad
+                    if len(raw) > expected_len:
+                        raw = raw[:expected_len]
+                    else:
+                        raw.extend(b'\x00' * (expected_len - len(raw)))
+                
+                image_raw = bytes(raw)
+                logger.info(f"Regenerated raw data: {len(image_raw)} bytes ({new_w}x{new_h} pixels)")
+        else:
+            # Use stored raw data
+            logger.info(f"Using stored raw image data for UUID: {uuid}")
+            image_raw = transcription.image_raw
+        
+        # Optionally wrap the raw bytes into the printer command stream
+        wrap_param = request.GET.get('wrap', '0')
+        wrap_flag = wrap_param.lower() in ('1', 'true', 'yes')
+        if wrap_flag:
+            energy_param = request.GET.get('energy')
+            try:
+                energy = int(energy_param, 0) if energy_param is not None else 0xffff
+            except Exception:
+                energy = 0xffff
+            wrapped = wrap_raw_bytes_with_print_commands(image_raw, energy=energy)
+            buf = io.BytesIO(bytes(wrapped))
+            buf.seek(0)
+            resp = FileResponse(buf, content_type='application/octet-stream')
+            resp['Content-Length'] = str(len(wrapped))
+            resp['X-Printer-Wrapped'] = '1'
+            resp['X-Image-UUID'] = str(uuid)
+            return resp
         
         buf = io.BytesIO(image_raw)
         buf.seek(0)
         resp = FileResponse(buf, content_type='application/octet-stream')
         resp['Content-Length'] = str(len(image_raw))
         resp['X-Image-UUID'] = str(uuid)
-        resp['Content-Disposition'] = f'attachment; filename="image_raw_{uuid}.bin"'
         return resp
     
+    except ValueError as e:
+        return Response(
+            {'error': f'Invalid UUID format: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
     except Exception as e:
         logger.error(f"Error retrieving raw image for UUID {uuid}: {e}")
         return Response(
@@ -865,14 +1007,20 @@ def get_transcription_image_info(request, uuid):
     """
     Get information about the generated image for a transcription.
     
+    Parameters:
+    - uuid: UUID of the transcription request (with or without hyphens)
+    
     Returns:
     - Image path, raw data size, transcribed text, and generation status
     """
     from .models import Transcription
     
     try:
+        # Normalize UUID format
+        normalized_uuid = normalize_uuid(uuid)
+        
         try:
-            transcription = Transcription.objects.get(uuid=uuid)
+            transcription = Transcription.objects.get(uuid=normalized_uuid)
         except Transcription.DoesNotExist:
             logger.warning(f"Transcription not found for UUID: {uuid}")
             return Response(
@@ -898,6 +1046,11 @@ def get_transcription_image_info(request, uuid):
         
         return Response(response_data, status=status.HTTP_200_OK)
     
+    except ValueError as e:
+        return Response(
+            {'error': f'Invalid UUID format: {str(e)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
     except Exception as e:
         logger.error(f"Error retrieving image info for UUID {uuid}: {e}")
         return Response(
