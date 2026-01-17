@@ -4,9 +4,6 @@ This module handles image generation based on transcribed text.
 """
 import logging
 import os
-import re
-import base64
-import json
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -15,25 +12,6 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
-
-# Import genai lazily to handle missing dependency
-genai = None
-
-def _init_genai():
-    """Initialize Google Generative AI on first use"""
-    global genai
-    if genai is None:
-        try:
-            import google.generativeai as genai_module
-            genai = genai_module
-            api_key = os.getenv('GOOGLE_API_KEY')
-            if not api_key:
-                logger.warning("GOOGLE_API_KEY environment variable is not set")
-            else:
-                genai.configure(api_key=api_key)
-        except ImportError as e:
-            logger.error(f"Failed to import google.generativeai: {e}")
-            raise
 
 
 def create_and_save_image(text_subject: str, output_dir: str = None, model_name: str = None) -> tuple:
@@ -44,7 +22,7 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
     Args:
         text_subject: The subject/description for the image
         output_dir: Directory to save the image (defaults to media/image/)
-        model_name: Specific model to use (defaults to gemini-2.5-flash-image-preview)
+        model_name: Specific model to use (defaults to gemini-2.5-flash-image)
     
     Returns:
         tuple: (image_path, image_raw_data) where:
@@ -56,8 +34,8 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
     import io
     
     try:
-        # Initialize Google Generative AI on first use
-        _init_genai()
+        # Import the new Google GenAI SDK
+        from google import genai
         
         logger.info(f"Starting image generation for subject: {text_subject}")
         
@@ -82,23 +60,25 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
         
         # Use specified model or get from environment or default
         if model_name is None:
-            model_name = os.getenv('GEMINI_IMAGE_MODEL', 'models/gemini-2.5-flash-image-preview')
+            model_name = os.getenv('GEMINI_IMAGE_MODEL', 'gemini-2.5-flash-image')
         
         logger.info(f"Using model: {model_name}")
         
-        model = genai.GenerativeModel(
-            model_name,
-            generation_config=genai.GenerationConfig(
-                temperature=0.7,  # Slightly lower for faster generation
-                max_output_tokens=2048,  # Limit output tokens for speed
-            )
-        )
+        # Create client with API key
+        api_key = os.getenv('GOOGLE_API_KEY')
+        if not api_key:
+            raise Exception("GOOGLE_API_KEY environment variable is not set")
+        
+        client = genai.Client(api_key=api_key)
         
         # Create the full prompt with negative examples
         full_prompt = f"{image_generation_prompt}\n\nNegative: {negative_prompt}"
         
         logger.info("Sending prompt to Gemini API for image generation")
-        response = model.generate_content(full_prompt)
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[full_prompt],
+        )
         
         # Record API call end time
         api_end_time = datetime.utcnow()
@@ -110,37 +90,17 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
         
         # Extract image data from response
         image_data = None
-        resp_text = None
         
         try:
-            if hasattr(response, 'to_dict'):
-                try:
-                    resp_text = json.dumps(response.to_dict())
-                except Exception:
-                    resp_text = str(response)
-            else:
-                resp_text = str(response)
-            
-            # Look for data URLs like: data:image/png;base64,AAAA...
-            data_url_pattern = re.compile(r'data:(image/[^;]+);base64,([A-Za-z0-9+/=\n\r]+)')
-            m = data_url_pattern.search(resp_text)
-            
-            if m:
-                mime_type = m.group(1)
-                b64_data = re.sub(r'\s+', '', m.group(2))
-                image_data = base64.b64decode(b64_data)
-                logger.info(f"Extracted image data from response (mime: {mime_type})")
-            else:
-                # Try to find long standalone base64 blocks (heuristic)
-                long_b64_pattern = re.compile(r'([A-Za-z0-9+/=\n\r]{800,})')
-                m2 = long_b64_pattern.search(resp_text)
-                if m2:
-                    b64_data = re.sub(r'\s+', '', m2.group(1))
-                    try:
-                        image_data = base64.b64decode(b64_data)
-                        logger.info("Extracted image data using heuristic base64 pattern")
-                    except Exception as e:
-                        logger.error(f"Failed to decode heuristic base64 data: {e}")
+            # The new API returns parts with inline_data
+            for part in response.parts:
+                if part.inline_data is not None:
+                    # Get the image data directly (it's already bytes)
+                    image_data = part.inline_data.data
+                    logger.info("Extracted image data from response parts")
+                    break
+                elif part.text is not None:
+                    logger.info(f"Response text: {part.text}")
         
         except Exception as e:
             logger.error(f"Error extracting image from response: {e}")
