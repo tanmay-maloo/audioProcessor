@@ -364,18 +364,37 @@ def test_api(request):
 @api_view(['GET'])
 def get_genai_image(request):
     """
-    Serve the genai_response_20251109T120523Z.png image.
+    Serve the most recent genai_response image if available.
     
     Returns:
-    - PNG image file
+    - PNG image file (reduced for ESP32 compatibility)
+    - Error message if no image is available
     """
     try:
-        # Construct the path to the original image
-        image_path = Path(settings.MEDIA_ROOT) / 'image' / 'genai_response_20251109T120523Z.png'
-
-        if not image_path.exists():
-            logger.error(f"Image not found at: {image_path}")
-            raise Http404("Image not found")
+        # Look for existing images in the media/image directory
+        image_dir = Path(settings.MEDIA_ROOT) / 'image'
+        image_path = None
+        
+        if image_dir.exists():
+            # Find the most recent genai_response image
+            genai_images = list(image_dir.glob('genai_response_*.png'))
+            if genai_images:
+                # Sort by modification time, get the most recent
+                image_path = max(genai_images, key=lambda p: p.stat().st_mtime)
+                logger.info(f"Found existing image: {image_path}")
+        
+        # Check if we have an image to serve
+        if not image_path or not image_path.exists():
+            logger.warning("No genai images available")
+            return Response(
+                {
+                    'error': 'No image available',
+                    'message': 'No generated images found in the system',
+                    'suggestion': 'Generate an image first using the transcription API or upload one manually',
+                    'available_images': len(list(image_dir.glob('*.png'))) if image_dir.exists() else 0
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
 
         # Open the image and reduce it while preserving aspect ratio.
         # Default target: ~50 KB for the 1-bit PNG output. This keeps the endpoint
@@ -402,16 +421,25 @@ def get_genai_image(request):
                 # stop if good or too small to reduce further
                 if size <= target_bytes or (w <= 16 or h <= 16):
                     reduced_buf.seek(0)
-                    logger.info(f"Serving reduced image: {image_path} (w={w}, h={h}, bytes={size})")
-                    return FileResponse(reduced_buf, content_type='image/png')
+                    logger.info(f"Serving reduced image: {image_path.name} (w={w}, h={h}, bytes={size})")
+                    response = FileResponse(reduced_buf, content_type='image/png')
+                    response['X-Original-Image'] = image_path.name
+                    response['X-Reduced-Size'] = f"{w}x{h}"
+                    response['X-Original-Size'] = f"{orig_w}x{orig_h}"
+                    return response
                 # otherwise reduce scale and try again
                 scale = scale * 0.9
     
-    except Http404:
-        raise
     except Exception as e:
         logger.error(f"Error serving image: {str(e)}")
-        raise Http404("Error serving image")
+        return Response(
+            {
+                'error': 'Internal server error',
+                'details': str(e),
+                'endpoint': '/genai-image'
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 # --- Printer wrapping utilities -------------------------------------------------
@@ -656,20 +684,45 @@ def wrap_raw_bytes_with_print_commands(raw_data, energy: int = 0xffff):
 @api_view(['GET'])
 def get_genai_image_raw(request, invert: int | None = None):
     """
-    Serve the image as pre-processed raw printer bytes.
+    Serve the most recent genai image as pre-processed raw printer bytes.
+    
+    Query Parameters:
+    - invert: Set to '0' to disable bit inversion (default '1')
+    - wrap: Set to '1' to wrap with printer commands (default '0')
+    - energy: Energy level for printer commands (default 0xffff)
 
     Behavior:
-    - Loads the source PNG from media/image/
+    - Loads the most recent PNG from media/image/
     - Resizes to a width of 48 bytes per row (48 * 8 = 384 pixels), preserving aspect ratio
     - Converts to 1-bit using Floyd–Steinberg dithering
     - Optionally inverts bits with ?invert=1 (default true for many printers)
     - Returns raw binary: row-major, packed bytes, no headers
     """
     try:
-        image_path = Path(settings.MEDIA_ROOT) / 'image' / 'genai_response_20260113T214501Z.png'
-        if not image_path.exists():
-            logger.error(f"Image not found at: {image_path}")
-            raise Http404("Image not found")
+        # Look for existing images in the media/image directory
+        image_dir = Path(settings.MEDIA_ROOT) / 'image'
+        image_path = None
+        
+        if image_dir.exists():
+            # Find the most recent genai_response image
+            genai_images = list(image_dir.glob('genai_response_*.png'))
+            if genai_images:
+                # Sort by modification time, get the most recent
+                image_path = max(genai_images, key=lambda p: p.stat().st_mtime)
+                logger.info(f"Found existing image: {image_path}")
+        
+        # Check if we have an image to serve
+        if not image_path or not image_path.exists():
+            logger.warning("No genai images available for raw processing")
+            return Response(
+                {
+                    'error': 'No image available',
+                    'message': 'No generated images found in the system',
+                    'suggestion': 'Generate an image first using the transcription API or upload one manually',
+                    'available_images': len(list(image_dir.glob('*.png'))) if image_dir.exists() else 0
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
 
         # Bytes per row requested by the printer
         width_bytes = 48
@@ -741,6 +794,8 @@ def get_genai_image_raw(request, invert: int | None = None):
                 resp['X-Printer-Wrapped'] = '1'
                 resp['X-Image-Width-Bytes'] = str(width_bytes)
                 resp['X-Image-Height-Pixels'] = str(new_h)
+                resp['X-Original-Image'] = image_path.name
+                resp['X-Original-Size'] = f"{orig_w}x{orig_h}"
                 return resp
 
             buf = io.BytesIO(bytes(raw))
@@ -749,13 +804,20 @@ def get_genai_image_raw(request, invert: int | None = None):
             resp['Content-Length'] = str(len(raw))
             resp['X-Image-Width-Bytes'] = str(width_bytes)
             resp['X-Image-Height-Pixels'] = str(new_h)
+            resp['X-Original-Image'] = image_path.name
+            resp['X-Original-Size'] = f"{orig_w}x{orig_h}"
             return resp
 
-    except Http404:
-        raise
     except Exception as e:
         logger.error(f"Error generating raw image data: {e}")
-        raise Http404("Error generating raw image data")
+        return Response(
+            {
+                'error': 'Failed to generate raw image data',
+                'details': str(e),
+                'endpoint': '/genai-image-raw'
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 @api_view(['GET'])
