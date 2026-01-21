@@ -129,6 +129,9 @@ def transcribe_audio(request):
     Expected multipart/form-data format:
     - audio_file: Audio file (preferably .wav, .mp3, .m4a, etc.)
     
+    Query Parameters:
+    - device_id: Optional device identifier to track device-specific requests
+    
     Returns:
     - JSON response with UUID for tracking the transcription
     """
@@ -144,7 +147,10 @@ def transcribe_audio(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        logger.info(f"Received audio file for transcription: {audio_file.name}, size: {audio_file.size} bytes")
+        # Extract device_id from query parameters
+        device_id = request.GET.get('device_id')
+        
+        logger.info(f"Received audio file for transcription: {audio_file.name}, size: {audio_file.size} bytes, device_id: {device_id}")
         
         # Create audio directory if it doesn't exist
         audio_dir = Path(settings.MEDIA_ROOT) / 'audio'
@@ -168,10 +174,11 @@ def transcribe_audio(request):
         transcription = Transcription.objects.create(
             audio_filename=filename,
             audio_file_path=str(file_path),
+            device_id=device_id,
             status='pending'
         )
         
-        logger.info(f"Created transcription request with UUID: {transcription.uuid}")
+        logger.info(f"Created transcription request with UUID: {transcription.uuid}, device_id: {device_id}")
         
         # Start background transcription
         start_transcription_async(str(file_path), str(transcription.uuid))
@@ -181,6 +188,7 @@ def transcribe_audio(request):
             'status': 'success',
             'message': 'Audio file uploaded successfully. Transcription in progress.',
             'uuid': str(transcription.uuid),
+            'device_id': device_id,
             'file_info': {
                 'filename': filename,
                 'original_filename': audio_file.name,
@@ -1115,6 +1123,192 @@ def get_transcription_image_info(request, uuid):
         )
     except Exception as e:
         logger.error(f"Error retrieving image info for UUID {uuid}: {e}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# Device-based image endpoints
+
+@api_view(['GET'])
+def get_device_image_status(request, device_id):
+    """
+    Check if a device has an image available.
+    
+    Parameters:
+    - device_id: Device identifier
+    
+    Returns:
+    - JSON response with device status and image availability
+    """
+    from .models import DeviceImage
+    
+    try:
+        logger.info(f"Checking image status for device_id: {device_id}")
+        
+        try:
+            device_image = DeviceImage.objects.get(device_id=device_id)
+            
+            response_data = {
+                'device_id': device_id,
+                'image_available': device_image.image_available,
+                'created_at': device_image.created_at.isoformat() if device_image.created_at else None,
+                'updated_at': device_image.updated_at.isoformat() if device_image.updated_at else None,
+            }
+            
+            return Response(response_data, status=status.HTTP_200_OK)
+            
+        except DeviceImage.DoesNotExist:
+            # Device not found, return default status
+            response_data = {
+                'device_id': device_id,
+                'image_available': False,
+                'message': 'Device not found or no images generated yet'
+            }
+            
+            return Response(response_data, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        logger.error(f"Error checking device image status for {device_id}: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+def get_device_image_raw(request, device_id):
+    """
+    Get the raw binary image data for a device, similar to genai-image-raw.
+    
+    Parameters:
+    - device_id: Device identifier
+    
+    Query Parameters:
+    - invert: Set to '0' to disable bit inversion (default '1')
+    - wrap: Set to '1' to wrap with printer commands (default '0')
+    - energy: Energy level for printer commands (default 0xffff)
+    
+    Returns:
+    - Binary raw data for printer or error message
+    """
+    from .models import DeviceImage
+    
+    try:
+        logger.info(f"Getting raw image data for device_id: {device_id}")
+        
+        try:
+            device_image = DeviceImage.objects.get(device_id=device_id)
+        except DeviceImage.DoesNotExist:
+            return Response(
+                {
+                    'error': 'Device not found',
+                    'device_id': device_id,
+                    'message': 'No image data available for this device'
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Check if image is available
+        if not device_image.image_available or not device_image.image_raw:
+            return Response(
+                {
+                    'error': 'Image not available',
+                    'device_id': device_id,
+                    'image_available': device_image.image_available,
+                    'message': 'Image generation may still be in progress or failed'
+                },
+                status=status.HTTP_202_ACCEPTED
+            )
+        
+        # Get parameters
+        invert_param = request.GET.get('invert', '1')
+        invert_flag = invert_param.lower() in ('1', 'true', 'yes')
+        
+        # Use stored raw data
+        image_raw = device_image.image_raw
+        
+        # If inversion is different from what was stored, we might need to regenerate
+        # For now, we'll use the stored data as-is and assume it was generated correctly
+        
+        # Optionally wrap the raw bytes into the printer command stream
+        wrap_param = request.GET.get('wrap', '0')
+        wrap_flag = wrap_param.lower() in ('1', 'true', 'yes')
+        if wrap_flag:
+            energy_param = request.GET.get('energy')
+            try:
+                energy = int(energy_param, 0) if energy_param is not None else 0xffff
+            except Exception:
+                energy = 0xffff
+            wrapped = wrap_raw_bytes_with_print_commands(image_raw, energy=energy)
+            buf = io.BytesIO(bytes(wrapped))
+            buf.seek(0)
+            resp = FileResponse(buf, content_type='application/octet-stream')
+            resp['Content-Length'] = str(len(wrapped))
+            resp['X-Printer-Wrapped'] = '1'
+            resp['X-Device-ID'] = device_id
+            return resp
+        
+        buf = io.BytesIO(image_raw)
+        buf.seek(0)
+        resp = FileResponse(buf, content_type='application/octet-stream')
+        resp['Content-Length'] = str(len(image_raw))
+        resp['X-Device-ID'] = device_id
+        return resp
+    
+    except Exception as e:
+        logger.error(f"Error getting raw image for device {device_id}: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@csrf_exempt
+@api_view(['POST'])
+def set_device_image_unavailable(request, device_id):
+    """
+    Mark a device's image as unavailable (set image_available to false).
+    
+    Parameters:
+    - device_id: Device identifier
+    
+    Returns:
+    - JSON response confirming the update
+    """
+    from .models import DeviceImage
+    
+    try:
+        logger.info(f"Setting image unavailable for device_id: {device_id}")
+        
+        try:
+            device_image = DeviceImage.objects.get(device_id=device_id)
+            device_image.image_available = False
+            device_image.save()
+            
+            response_data = {
+                'status': 'success',
+                'message': 'Device image marked as unavailable',
+                'device_id': device_id,
+                'image_available': False,
+                'updated_at': device_image.updated_at.isoformat()
+            }
+            
+            return Response(response_data, status=status.HTTP_200_OK)
+            
+        except DeviceImage.DoesNotExist:
+            return Response(
+                {
+                    'error': 'Device not found',
+                    'device_id': device_id,
+                    'message': 'No device record found'
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+    
+    except Exception as e:
+        logger.error(f"Error setting device image unavailable for {device_id}: {str(e)}")
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

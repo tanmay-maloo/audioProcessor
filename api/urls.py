@@ -10,10 +10,14 @@ urlpatterns = [
     re_path(r'^image/([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12})$', views.get_image_by_uuid, name='get_image_by_uuid'),
     re_path(r'^image-raw/([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12})$', views.get_image_raw_by_uuid, name='get_image_raw_by_uuid'),
     re_path(r'^image-info/([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12})$', views.get_transcription_image_info, name='get_transcription_image_info'),
+    # Device-based image endpoints
+    path('device/<str:device_id>/status', views.get_device_image_status, name='get_device_image_status'),
+    path('device/<str:device_id>/image-raw', views.get_device_image_raw, name='get_device_image_raw'),
+    path('device/<str:device_id>/mark-unavailable', views.set_device_image_unavailable, name='set_device_image_unavailable'),
+    # General endpoints
     path('health', views.health_check, name='health'),
     path('test', views.test_api, name='test'),
     path('genai-image', views.get_genai_image, name='genai_image'),
     path('genai-image-raw', views.get_genai_image_raw, name='genai_image_raw'),
     path('genai-image-raw/<int:invert>', views.get_genai_image_raw, name='genai_image_raw_invert'),
 ]
-

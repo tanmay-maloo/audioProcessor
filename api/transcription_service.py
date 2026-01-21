@@ -144,6 +144,7 @@ def _generate_image_from_transcription(transcription, transcription_end_time=Non
     """
     try:
         from .image_service import create_and_save_image
+        from .models import DeviceImage
         
         # Record image generation start time
         image_start_time = timezone.now()
@@ -160,6 +161,25 @@ def _generate_image_from_transcription(transcription, transcription_end_time=Non
         transcription.image_path = image_path
         transcription.image_raw = image_raw_data
         transcription.save()
+        
+        # Update DeviceImage table if device_id is present
+        if transcription.device_id:
+            device_image, created = DeviceImage.objects.get_or_create(
+                device_id=transcription.device_id,
+                defaults={
+                    'image_available': True,
+                    'image_path': image_path,
+                    'image_raw': image_raw_data
+                }
+            )
+            if not created:
+                # Update existing record
+                device_image.image_available = True
+                device_image.image_path = image_path
+                device_image.image_raw = image_raw_data
+                device_image.save()
+            
+            logger.info(f"Updated DeviceImage for device_id: {transcription.device_id}")
         
         # Calculate image generation time
         image_duration = (image_end_time - image_start_time).total_seconds()
