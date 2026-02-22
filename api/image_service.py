@@ -167,14 +167,16 @@ def _generate_raw_image_data(image_path: str) -> bytes:
     2. Resize to 48 bytes per row (384 pixels), preserving aspect ratio
     3. Convert to 1-bit using Floyd-Steinberg dithering
     4. Pack into raw bytes (row-major, LSB-first)
+    5. Store WITHOUT inversion (invert=False) so endpoints can apply inversion as needed
     
     Args:
         image_path: Full path to the image file
     
     Returns:
-        bytes: Raw binary data for the printer
+        bytes: Raw binary data for the printer (NOT inverted)
     """
-    from PIL import Image
+    from datetime import datetime
+    from .image_utils import generate_raw_image_data
     
     try:
         logger.info(f"Generating raw image data from: {image_path}")
@@ -182,59 +184,16 @@ def _generate_raw_image_data(image_path: str) -> bytes:
         # Record raw processing start time
         start_time = datetime.utcnow()
         
-        with Image.open(image_path) as img:
-            # Bytes per row requested by the printer
-            width_bytes = 48
-            width_px = width_bytes * 8  # 384 pixels
-            
-            orig_w, orig_h = img.size
-            # Preserve aspect ratio: compute new height for width_px
-            new_w = width_px
-            new_h = max(1, int(orig_h * (new_w / orig_w)))
-            
-            # Resize and dither (Floyd-Steinberg)
-            gray = img.resize((new_w, new_h), resample=Image.LANCZOS).convert('L')
-            bw = gray.convert('1')  # default uses Floyd-Steinberg dither
-            
-            # Pack into raw bytes (LSB-first per row)
-            raw = bytearray()
-            for y in range(new_h):
-                byte = 0
-                bits = 0
-                for x in range(new_w):
-                    pixel = bw.getpixel((x, y))
-                    # pixel is 0 (black) or 255 (white)
-                    bit = 1 if pixel == 0 else 0
-                    # Invert bit for printer (default behavior)
-                    bit ^= 1
-                    # LSB-first: place bit at current bit position (0..7)
-                    byte |= (bit << bits)
-                    bits += 1
-                    if bits == 8:
-                        raw.append(byte & 0xFF)
-                        byte = 0
-                        bits = 0
-                if bits > 0:
-                    # Leftover bits are already in low-order positions; pad high bits with 0
-                    raw.append(byte & 0xFF)
-            
-            # Ensure row length
-            expected_len = new_h * width_bytes
-            if len(raw) != expected_len:
-                logger.warning(f"Raw length {len(raw)} does not match expected {expected_len}; adjusting")
-                if len(raw) > expected_len:
-                    raw = raw[:expected_len]
-                else:
-                    raw.extend(b'\x00' * (expected_len - len(raw)))
-            
-            logger.info(f"Generated raw image data: {len(raw)} bytes ({new_w}x{new_h} pixels)")
-            
-            # Record and log processing time
-            end_time = datetime.utcnow()
-            duration = (end_time - start_time).total_seconds()
-            logger.info(f"Raw image data generation took {duration:.2f}s")
-            
-            return bytes(raw)
+        # Use common utility function with invert=False
+        # This stores the data in non-inverted form, allowing endpoints to apply inversion as needed
+        raw_data = generate_raw_image_data(image_path, invert=False)
+        
+        # Record and log processing time
+        end_time = datetime.utcnow()
+        duration = (end_time - start_time).total_seconds()
+        logger.info(f"Raw image data generation took {duration:.2f}s")
+        
+        return raw_data
     
     except Exception as e:
         logger.error(f"Error generating raw image data: {e}")

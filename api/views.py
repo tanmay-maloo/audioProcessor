@@ -743,78 +743,48 @@ def get_genai_image_raw(request, invert: int | None = None):
             invert_param = request.GET.get('invert', '1')
             invert_flag = invert_param.lower() in ('1', 'true', 'yes')
 
+        # Use common utility function to generate raw data
+        from .image_utils import generate_raw_image_data
+        raw = generate_raw_image_data(str(image_path), invert=invert_flag)
+        
+        # Get image dimensions for headers
         with Image.open(image_path) as img:
             orig_w, orig_h = img.size
-            # preserve aspect ratio: compute new height for width_px
-            new_w = width_px
-            new_h = max(1, int(orig_h * (new_w / orig_w)))
+        
+        # Calculate processed dimensions
+        new_w = width_px
+        new_h = max(1, int(orig_h * (new_w / orig_w)))
 
-            # Resize and dither (Floyd–Steinberg)
-            gray = img.resize((new_w, new_h), resample=Image.LANCZOS).convert('L')
-            bw = gray.convert('1')  # default uses Floyd–Steinberg dither
-
-            # Pack into raw bytes (LSB-first per row)
-            raw = bytearray()
-            for y in range(new_h):
-                byte = 0
-                bits = 0
-                for x in range(new_w):
-                    pixel = bw.getpixel((x, y))
-                    # pixel is 0 (black) or 255 (white)
-                    bit = 1 if pixel == 0 else 0
-                    if invert_flag:
-                        bit ^= 1
-                    # LSB-first: place bit at current bit position (0..7)
-                    byte |= (bit << bits)
-                    bits += 1
-                    if bits == 8:
-                        raw.append(byte & 0xFF)
-                        byte = 0
-                        bits = 0
-                if bits > 0:
-                    # leftover bits are already in low-order positions; pad high bits with 0
-                    raw.append(byte & 0xFF)
-
-            # Ensure row length
-            expected_len = new_h * width_bytes
-            if len(raw) != expected_len:
-                logger.warning(f"Raw length {len(raw)} does not match expected {expected_len}; adjusting")
-                # If width_px didn't match multiple of 8 somehow, trim or pad
-                if len(raw) > expected_len:
-                    raw = raw[:expected_len]
-                else:
-                    raw.extend(b'\x00' * (expected_len - len(raw)))
-
-            # Optionally wrap the raw bytes into the printer command stream
-            wrap_param = request.GET.get('wrap', '0')
-            wrap_flag = wrap_param.lower() in ('1', 'true', 'yes')
-            if wrap_flag:
-                energy_param = request.GET.get('energy')
-                try:
-                    energy = int(energy_param, 0) if energy_param is not None else 0xffff
-                except Exception:
-                    energy = 0xffff
-                wrapped = wrap_raw_bytes_with_print_commands(bytes(raw), energy=energy)
-                buf = io.BytesIO(bytes(wrapped))
-                buf.seek(0)
-                resp = FileResponse(buf, content_type='application/octet-stream')
-                resp['Content-Length'] = str(len(wrapped))
-                resp['X-Printer-Wrapped'] = '1'
-                resp['X-Image-Width-Bytes'] = str(width_bytes)
-                resp['X-Image-Height-Pixels'] = str(new_h)
-                resp['X-Original-Image'] = image_path.name
-                resp['X-Original-Size'] = f"{orig_w}x{orig_h}"
-                return resp
-
-            buf = io.BytesIO(bytes(raw))
+        # Optionally wrap the raw bytes into the printer command stream
+        wrap_param = request.GET.get('wrap', '0')
+        wrap_flag = wrap_param.lower() in ('1', 'true', 'yes')
+        if wrap_flag:
+            energy_param = request.GET.get('energy')
+            try:
+                energy = int(energy_param, 0) if energy_param is not None else 0xffff
+            except Exception:
+                energy = 0xffff
+            wrapped = wrap_raw_bytes_with_print_commands(bytes(raw), energy=energy)
+            buf = io.BytesIO(bytes(wrapped))
             buf.seek(0)
             resp = FileResponse(buf, content_type='application/octet-stream')
-            resp['Content-Length'] = str(len(raw))
+            resp['Content-Length'] = str(len(wrapped))
+            resp['X-Printer-Wrapped'] = '1'
             resp['X-Image-Width-Bytes'] = str(width_bytes)
             resp['X-Image-Height-Pixels'] = str(new_h)
             resp['X-Original-Image'] = image_path.name
             resp['X-Original-Size'] = f"{orig_w}x{orig_h}"
             return resp
+
+        buf = io.BytesIO(bytes(raw))
+        buf.seek(0)
+        resp = FileResponse(buf, content_type='application/octet-stream')
+        resp['Content-Length'] = str(len(raw))
+        resp['X-Image-Width-Bytes'] = str(width_bytes)
+        resp['X-Image-Height-Pixels'] = str(new_h)
+        resp['X-Original-Image'] = image_path.name
+        resp['X-Original-Size'] = f"{orig_w}x{orig_h}"
+        return resp
 
     except Exception as e:
         logger.error(f"Error generating raw image data: {e}")
@@ -1034,13 +1004,14 @@ def get_image_raw_by_uuid(request, uuid):
             logger.info(f"Using stored raw image data for UUID: {uuid}")
             image_raw = transcription.image_raw
             
-            # The stored raw data is inverted by default (invert=1 during generation)
-            # If user wants non-inverted (invert=0), we need to flip all bits
+            # The stored raw data is NOT inverted (invert=False during generation)
+            # If user wants inverted (invert=1, the default), we need to flip all bits
             invert_param = request.GET.get('invert', '1')
             invert_flag = invert_param.lower() in ('1', 'true', 'yes')
-            if not invert_flag:
+            if invert_flag:
                 # Flip all bits: 0->1, 1->0
-                image_raw = bytes(b ^ 0xFF for b in image_raw)
+                from .image_utils import flip_bits
+                image_raw = flip_bits(image_raw)
                 logger.info(f"Applied bit inversion for UUID {uuid}")
         
         # Optionally wrap the raw bytes into the printer command stream
@@ -1235,14 +1206,15 @@ def get_device_image_raw(request, device_id):
         invert_param = request.GET.get('invert', '1')
         invert_flag = invert_param.lower() in ('1', 'true', 'yes')
         
-        # Use stored raw data (stored data is already inverted by default)
+        # Use stored raw data (stored data is now NON-inverted by default)
         image_raw = device_image.image_raw
         
-        # The stored raw data is inverted by default (invert=1 during generation)
-        # If user wants non-inverted (invert=0), we need to flip all bits
-        if not invert_flag:
+        # The stored raw data is NOT inverted (invert=False during generation)
+        # If user wants inverted (invert=1, the default), we need to flip all bits
+        if invert_flag:
             # Flip all bits: 0->1, 1->0
-            image_raw = bytes(b ^ 0xFF for b in image_raw)
+            from .image_utils import flip_bits
+            image_raw = flip_bits(image_raw)
             logger.info(f"Applied bit inversion for device {device_id}")
         
         # Optionally wrap the raw bytes into the printer command stream
