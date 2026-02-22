@@ -43,21 +43,36 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
         api_start_time = datetime.utcnow()
         
         # Prepare the image generation prompt
+        # image_generation_prompt = (
+        #     f"A cheerful, kid-friendly cartoon-style **pure black line art drawing** of a {text_subject}. "
+        #     "**Subject is large and fills the canvas well**, with an expressive face, varied hairstyles, and dynamic pose. "
+        #     "**Bold, clean outlines on a stark white background**, resembling a simple coloring book page. "
+        #     "Includes basic, engaging background elements like grass, sky, and playful sports equipment, framed to enhance the main subject. "
+        #     "Details suitable for kids. Pixel dimensions: **685px width, 913px height (3:4 aspect ratio)**. "
+        #     "**No grayscale, no shading, no color fill whatsoever.**"
+        # )
+        
+        # negative_prompt = (
+        #     "color, grayscale, shading, shadows, gradients, textures, photorealistic, 3D, complex, "
+        #     "ugly, disfigured, scary, boring, dull, muted, abstract, text, signature, watermark, logo, "
+        #     "multiple subjects, small subject, too much white space, empty background"
+        # )
         image_generation_prompt = (
-            f"A cheerful, kid-friendly cartoon-style **pure black line art drawing** of a {text_subject}. "
-            "**Subject is large and fills the canvas well**, with an expressive face, varied hairstyles, and dynamic pose. "
-            "**Bold, clean outlines on a stark white background**, resembling a simple coloring book page. "
-            "Includes basic, engaging background elements like grass, sky, and playful sports equipment, framed to enhance the main subject. "
-            "Details suitable for kids. Pixel dimensions: **685px width, 913px height (3:4 aspect ratio)**. "
-            "**No grayscale, no shading, no color fill whatsoever.**"
+            f"A bold, high-contrast 2D black and white sticker of: {text_subject}. "
+            "Designed for kids as a single, unified graphic. "
+            "Features thick, chunky black outlines and solid white fill. "
+            "No grayscale, no shading, no shadows, and no gradients. "
+            "The design is a centered, clean vector-style illustration with a stark white background. "
+            "Minimalist 'coloring book' aesthetic with bold, simplified shapes. "
+            "Fills 90% of the 3:4 frame to maximize thermal print area."
         )
-        
+
         negative_prompt = (
-            "color, grayscale, shading, shadows, gradients, textures, photorealistic, 3D, complex, "
-            "ugly, disfigured, scary, boring, dull, muted, abstract, text, signature, watermark, logo, "
-            "multiple subjects, small subject, too much white space, empty background"
+            "color, grayscale, shading, shadows, gradients, textures, photorealistic, 3D, "
+            "background, scenery, environment, grass, sky, trees, human, person, kid, "
+            "intricate detail, thin lines, sketching, dithered patterns, blurry, "
+            "tiny dots, messy lines, low contrast"
         )
-        
         # Use specified model or get from environment or default
         if model_name is None:
             model_name = os.getenv('GEMINI_IMAGE_MODEL', 'gemini-2.5-flash-image')
