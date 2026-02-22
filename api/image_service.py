@@ -57,21 +57,58 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
         #     "ugly, disfigured, scary, boring, dull, muted, abstract, text, signature, watermark, logo, "
         #     "multiple subjects, small subject, too much white space, empty background"
         # )
-        image_generation_prompt = (
-            f"A bold, high-contrast 2D black and white sticker of: {text_subject}. "
-            "Designed for kids as a single, unified graphic. "
-            "Features thick, chunky black outlines and solid white fill. "
-            "No grayscale, no shading, no shadows, and no gradients. "
-            "The design is a centered, clean vector-style illustration with a stark white background. "
-            "Minimalist 'coloring book' aesthetic with bold, simplified shapes. "
-            "Fills 90% of the 3:4 frame to maximize thermal print area."
-        )
+        # Detect if this is a text-based greeting/message (no clear physical subject)
+        text_keywords = ['happy', 'congratulations', 'welcome', 'birthday', 'diwali', 'christmas', 
+                        'new year', 'thank you', 'good luck', 'best wishes', 'celebration']
+        is_text_greeting = any(keyword in text_subject.lower() for keyword in text_keywords)
+        
+        if is_text_greeting:
+            # For greetings/messages: create bold decorative text with themed background
+            image_generation_prompt = (
+                f"A bold, high-contrast black and white decorative design featuring the text: '{text_subject}'. "
+                "Large, bold, decorative hand-lettered text fills 50-60% of the center with thick outlines (4-6px width). "
+                "Text style: playful, bubbly, kid-friendly font with decorative flourishes. "
+                "IMPORTANT: Include a COMPLETE themed background scene that fills the ENTIRE image from edge to edge, "
+                "related to the message theme: "
+                "if Diwali - diyas, rangoli patterns, fireworks, decorative lamps, stars; "
+                "if Christmas - trees, ornaments, snowflakes, gifts, bells, stars; "
+                "if Birthday - balloons, confetti, cake, candles, party hats, streamers; "
+                "if celebration - fireworks, stars, confetti, balloons, decorative elements; "
+                "if nature theme - flowers, leaves, vines, butterflies, clouds, sun. "
+                "Background decorative elements should fill 100% of the frame around the text. "
+                "Each element has its own outline, but NO border or frame around the entire image. "
+                "Pure black lines on white fill only - no grayscale, no shading, no gradients, no color. "
+                "Clean vector-style coloring book aesthetic with bold, simplified shapes suitable for thermal printing. "
+                "Composition: 3:4 aspect ratio (685x913px)."
+            )
+        else:
+            # For object-based subjects: create scene with main subject
+            image_generation_prompt = (
+                f"A bold, high-contrast black and white illustration of: {text_subject}. "
+                "Kid-friendly cartoon style with thick, chunky black outlines (3-5px width) around each individual object and solid white fill areas. "
+                "Main subject is large and centered, filling 60-70% of the frame with an expressive, cheerful appearance. "
+                "IMPORTANT: Include a COMPLETE contextual background scene that fills the ENTIRE image from edge to edge: "
+                "if playing/sports - full playground scene with ground, sky, clouds, other kids playing, equipment, grass, sun; "
+                "if animal - complete natural habitat with ground/grass, trees, bushes, clouds, sky, flowers, other small animals; "
+                "if food - full kitchen or dining scene with table, plates, utensils, windows, decorations; "
+                "if vehicle - complete road/street scene with buildings, trees, clouds, road markings, traffic signs, landscape; "
+                "if character/person - full environment scene with ground, buildings or nature, sky with clouds or sun. "
+                "Background should fill 100% of the frame with simplified line art elements creating a complete scene. "
+                "Layer the scene: foreground (main subject), middle ground (related objects), background (sky, clouds, distant elements). "
+                "Each object has its own outline, but NO border or frame around the entire image - the scene extends to all edges. "
+                "Pure black lines on white fill only - no grayscale, no shading, no gradients, no color. "
+                "Clean vector-style coloring book aesthetic with bold, simplified shapes suitable for thermal printing. "
+                "Composition: 3:4 aspect ratio (685x913px), front-facing or 3/4 view angle for consistency."
+            )
 
         negative_prompt = (
-            "color, grayscale, shading, shadows, gradients, textures, photorealistic, 3D, "
-            "background, scenery, environment, grass, sky, trees, human, person, kid, "
-            "intricate detail, thin lines, sketching, dithered patterns, blurry, "
-            "tiny dots, messy lines, low contrast"
+            "color, colored, grayscale, gray tones, shading, shadows, gradients, soft edges, blur, "
+            "photorealistic, 3D render, realistic textures, detailed textures, crosshatching, stippling, "
+            "thin lines, sketchy lines, messy lines, dithered patterns, halftone dots, "
+            "low contrast, faded, washed out, complex details, intricate patterns, "
+            "scary, ugly, disfigured, distorted, too many subjects, overcrowded, cluttered, "
+            "empty background, plain white background, blank background, too much white space, subject too small, "
+            "border around image, frame around sticker, outer border, rectangular border, edge border, sticker outline"
         )
         # Use specified model or get from environment or default
         if model_name is None:
