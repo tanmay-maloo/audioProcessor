@@ -14,6 +14,7 @@ urlpatterns = [
     path('device/<str:device_id>/status', views.get_device_image_status, name='get_device_image_status'),
     path('device/<str:device_id>/image-raw', views.get_device_image_raw, name='get_device_image_raw'),
     path('device/<str:device_id>/mark-unavailable', views.set_device_image_unavailable, name='set_device_image_unavailable'),
+    path('device/<str:device_id>/mark-available', views.set_device_image_available, name='set_device_image_available'),
     # General endpoints
     path('health', views.health_check, name='health'),
     path('test', views.test_api, name='test'),

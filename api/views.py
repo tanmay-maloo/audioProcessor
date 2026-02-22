@@ -1313,3 +1313,53 @@ def set_device_image_unavailable(request, device_id):
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@csrf_exempt
+@api_view(['POST'])
+def set_device_image_available(request, device_id):
+    """
+    Mark a device's image as available (set image_available to true).
+    
+    Parameters:
+    - device_id: Device identifier
+    
+    Returns:
+    - JSON response confirming the update
+    """
+    from .models import DeviceImage
+    
+    try:
+        logger.info(f"Setting image available for device_id: {device_id}")
+        
+        try:
+            device_image = DeviceImage.objects.get(device_id=device_id)
+            device_image.image_available = True
+            device_image.save()
+            
+            response_data = {
+                'status': 'success',
+                'message': 'Device image marked as available',
+                'device_id': device_id,
+                'image_available': True,
+                'updated_at': device_image.updated_at.isoformat()
+            }
+            
+            return Response(response_data, status=status.HTTP_200_OK)
+            
+        except DeviceImage.DoesNotExist:
+            return Response(
+                {
+                    'error': 'Device not found',
+                    'device_id': device_id,
+                    'message': 'No device record found'
+                },
+                status=status.HTTP_404_NOT_FOUND
+            )
+    
+    except Exception as e:
+        logger.error(f"Error setting device image available for {device_id}: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
