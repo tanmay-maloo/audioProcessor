@@ -39,17 +39,24 @@ When `wrap=1` is added, the endpoint wraps the raw image bytes with printer init
 Without these commands, the printer receives raw data but doesn't know what to do with it.
 
 ## Additional Parameters
-Both endpoints support the same query parameters:
+Both raw endpoints (`/device/<device_id>/image-raw` and `/image-raw/<uuid>`) support the same query parameters:
 
 - `wrap=1` - Wrap with printer commands (REQUIRED for printing)
 - `invert=1` - Invert bits (default is 1, set to 0 to disable)
-  - `invert=1` (default): Black becomes white, white becomes black
-  - `invert=0`: Normal colors (use this if image appears dark with white lines)
+  - `invert=1` (default): Stored data is already inverted (dark background with white lines)
+  - `invert=0`: Flips all bits to reverse colors (light background with black lines)
+  - **How it works**: The stored raw data has bits inverted by default. When you set `invert=0`, the API flips every bit (0→1, 1→0) to reverse the image colors.
 - `energy=0xffff` - Set printer energy level (default is 0xffff)
+
+**Note**: The PNG endpoint (`/image/<uuid>`) returns a standard PNG file and does NOT support the `invert` parameter. Use the raw endpoints for inversion control.
 
 ### Example with all parameters:
 ```bash
-curl --location 'https://tanmaymaloo.pythonanywhere.com/device/<device_id>/image-raw?wrap=1&energy=0xffff&invert=0'
+# Device endpoint with inversion disabled (light background)
+curl --location 'https://tanmaymaloo.pythonanywhere.com/device/<device_id>/image-raw?wrap=1&invert=0&energy=0xffff'
+
+# UUID endpoint with inversion disabled (light background)
+curl --location 'https://tanmaymaloo.pythonanywhere.com/image-raw/<uuid>?wrap=1&invert=0'
 ```
 
 ### Common Issue: Dark Image with White Lines

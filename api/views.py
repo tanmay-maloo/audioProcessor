@@ -1033,6 +1033,15 @@ def get_image_raw_by_uuid(request, uuid):
             # Use stored raw data
             logger.info(f"Using stored raw image data for UUID: {uuid}")
             image_raw = transcription.image_raw
+            
+            # The stored raw data is inverted by default (invert=1 during generation)
+            # If user wants non-inverted (invert=0), we need to flip all bits
+            invert_param = request.GET.get('invert', '1')
+            invert_flag = invert_param.lower() in ('1', 'true', 'yes')
+            if not invert_flag:
+                # Flip all bits: 0->1, 1->0
+                image_raw = bytes(b ^ 0xFF for b in image_raw)
+                logger.info(f"Applied bit inversion for UUID {uuid}")
         
         # Optionally wrap the raw bytes into the printer command stream
         wrap_param = request.GET.get('wrap', '0')
@@ -1226,11 +1235,15 @@ def get_device_image_raw(request, device_id):
         invert_param = request.GET.get('invert', '1')
         invert_flag = invert_param.lower() in ('1', 'true', 'yes')
         
-        # Use stored raw data
+        # Use stored raw data (stored data is already inverted by default)
         image_raw = device_image.image_raw
         
-        # If inversion is different from what was stored, we might need to regenerate
-        # For now, we'll use the stored data as-is and assume it was generated correctly
+        # The stored raw data is inverted by default (invert=1 during generation)
+        # If user wants non-inverted (invert=0), we need to flip all bits
+        if not invert_flag:
+            # Flip all bits: 0->1, 1->0
+            image_raw = bytes(b ^ 0xFF for b in image_raw)
+            logger.info(f"Applied bit inversion for device {device_id}")
         
         # Optionally wrap the raw bytes into the printer command stream
         wrap_param = request.GET.get('wrap', '0')
