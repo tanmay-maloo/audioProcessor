@@ -144,15 +144,43 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
         image_filename = f"genai_response_{timestamp}.png"
         image_path = output_dir / image_filename
         
-        # Save the PNG image
-        with open(image_path, 'wb') as f:
-            f.write(image_data)
+        # Load image with PIL to scale it down
+        # Open the image from bytes
+        original_image = Image.open(io.BytesIO(image_data))
+        original_size = len(image_data)
+        logger.info(f"Original image size: {original_image.size}, file size: {original_size / 1024:.2f} KB")
+        
+        # Scale down the image to reduce file size while maintaining aspect ratio
+        # Target max dimension of 1024px (adjust as needed)
+        max_dimension = 1024
+        width, height = original_image.size
+        
+        if width > max_dimension or height > max_dimension:
+            # Calculate scaling factor
+            scale_factor = min(max_dimension / width, max_dimension / height)
+            new_width = int(width * scale_factor)
+            new_height = int(height * scale_factor)
+            
+            # Resize with high-quality resampling
+            scaled_image = original_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            logger.info(f"Scaled image from {original_image.size} to {scaled_image.size}")
+        else:
+            scaled_image = original_image
+            logger.info("Image already within size limits, no scaling needed")
+        
+        # Save the scaled PNG image with optimization
+        scaled_image.save(image_path, 'PNG', optimize=True)
+        
+        # Get final file size
+        final_size = os.path.getsize(image_path)
+        compression_ratio = (1 - final_size / original_size) * 100 if original_size > 0 else 0
         
         # Record file save end time
         save_end_time = datetime.utcnow()
         save_duration = (save_end_time - save_start_time).total_seconds()
         
-        logger.info(f"Saved generated image to: {image_path}")
+        logger.info(f"Saved scaled image to: {image_path}")
+        logger.info(f"Final file size: {final_size / 1024:.2f} KB (reduced by {compression_ratio:.1f}%)")
         logger.info(f"File save completed in {save_duration:.2f}s")
         
         # Generate raw image data for printer
