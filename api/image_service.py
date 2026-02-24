@@ -188,8 +188,8 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
         logger.info(f"Original image size: {original_image.size}, file size: {original_size / 1024:.2f} KB")
         
         # Scale down the image to reduce file size while maintaining aspect ratio
-        # Target max dimension of 1024px (adjust as needed)
-        max_dimension = 1024
+        # Target max dimension of 600px (ideal for 58mm thermal printer)
+        max_dimension = 600
         width, height = original_image.size
         
         if width > max_dimension or height > max_dimension:
@@ -205,8 +205,21 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
             scaled_image = original_image
             logger.info("Image already within size limits, no scaling needed")
         
-        # Save the scaled PNG image with optimization
-        scaled_image.save(image_path, 'PNG', optimize=True)
+        # Convert to grayscale for black/white line art (reduces file size significantly)
+        # 'L' mode = 8-bit grayscale, perfect for thermal printer output
+        grayscale_image = scaled_image.convert('L')
+        logger.info(f"Converted to grayscale mode for optimal thermal printing")
+        
+        # Strip metadata to reduce file size
+        # Remove EXIF, ICC profile, and other metadata
+        data = list(grayscale_image.getdata())
+        image_without_exif = Image.new('L', grayscale_image.size)
+        image_without_exif.putdata(data)
+        
+        # Save with maximum PNG compression while maintaining quality
+        # compress_level=9 provides maximum compression (0-9 scale)
+        # optimize=True enables additional compression passes
+        image_without_exif.save(image_path, 'PNG', optimize=True, compress_level=9)
         
         # Get final file size
         final_size = os.path.getsize(image_path)
