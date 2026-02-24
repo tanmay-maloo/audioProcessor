@@ -169,7 +169,9 @@ def _generate_image_from_transcription(transcription, transcription_end_time=Non
                 defaults={
                     'image_available': True,
                     'image_path': image_path,
-                    'image_raw': image_raw_data
+                    'image_raw': image_raw_data,
+                    'transcript_available': True,
+                    'transcript': transcription.transcribed_text
                 }
             )
             if not created:
@@ -177,6 +179,8 @@ def _generate_image_from_transcription(transcription, transcription_end_time=Non
                 device_image.image_available = True
                 device_image.image_path = image_path
                 device_image.image_raw = image_raw_data
+                device_image.transcript_available = True
+                device_image.transcript = transcription.transcribed_text
                 device_image.save()
             
             logger.info(f"Updated DeviceImage for device_id: {transcription.device_id}")

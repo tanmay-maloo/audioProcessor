@@ -1133,6 +1133,8 @@ def get_device_image_status(request, device_id):
             response_data = {
                 'device_id': device_id,
                 'image_available': device_image.image_available,
+                'transcript_available': device_image.transcript_available,
+                'transcript': device_image.transcript if device_image.transcript_available else None,
                 'created_at': device_image.created_at.isoformat() if device_image.created_at else None,
                 'updated_at': device_image.updated_at.isoformat() if device_image.updated_at else None,
             }
@@ -1144,6 +1146,8 @@ def get_device_image_status(request, device_id):
             response_data = {
                 'device_id': device_id,
                 'image_available': False,
+                'transcript_available': False,
+                'transcript': None,
                 'message': 'Device not found or no images generated yet'
             }
             
@@ -1254,10 +1258,15 @@ def get_device_image_raw(request, device_id):
 @api_view(['POST'])
 def set_device_image_unavailable(request, device_id):
     """
-    Mark a device's image as unavailable (set image_available to false).
+    Mark a device's image and/or transcript as unavailable.
     
     Parameters:
     - device_id: Device identifier
+    
+    Query Parameters:
+    - transcript: Set to 'true' to mark only transcript as unavailable
+    - image: Set to 'true' to mark only image as unavailable
+    - If neither is provided, both will be marked as unavailable
     
     Returns:
     - JSON response confirming the update
@@ -1265,18 +1274,48 @@ def set_device_image_unavailable(request, device_id):
     from .models import DeviceImage
     
     try:
-        logger.info(f"Setting image unavailable for device_id: {device_id}")
+        # Get query parameters
+        transcript_param = request.GET.get('transcript', '').lower()
+        image_param = request.GET.get('image', '').lower()
+        
+        # Determine what to mark unavailable
+        mark_transcript = transcript_param == 'true'
+        mark_image = image_param == 'true'
+        
+        # If neither is specified, mark both unavailable
+        if not mark_transcript and not mark_image:
+            mark_transcript = True
+            mark_image = True
+        
+        logger.info(f"Setting unavailable for device_id: {device_id}, transcript={mark_transcript}, image={mark_image}")
         
         try:
             device_image = DeviceImage.objects.get(device_id=device_id)
-            device_image.image_available = False
+            
+            # Update fields based on parameters
+            if mark_image:
+                device_image.image_available = False
+            
+            if mark_transcript:
+                device_image.transcript_available = False
+                device_image.transcript = None
+            
             device_image.save()
+            
+            # Build response message
+            if mark_transcript and mark_image:
+                message = 'Device image and transcript marked as unavailable'
+            elif mark_transcript:
+                message = 'Device transcript marked as unavailable'
+            elif mark_image:
+                message = 'Device image marked as unavailable'
             
             response_data = {
                 'status': 'success',
-                'message': 'Device image marked as unavailable',
+                'message': message,
                 'device_id': device_id,
-                'image_available': False,
+                'image_available': device_image.image_available,
+                'transcript_available': device_image.transcript_available,
                 'updated_at': device_image.updated_at.isoformat()
             }
             
@@ -1293,7 +1332,7 @@ def set_device_image_unavailable(request, device_id):
             )
     
     except Exception as e:
-        logger.error(f"Error setting device image unavailable for {device_id}: {str(e)}")
+        logger.error(f"Error setting device unavailable for {device_id}: {str(e)}")
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

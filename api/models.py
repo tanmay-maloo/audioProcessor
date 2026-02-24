@@ -102,6 +102,15 @@ class DeviceImage(models.Model):
         null=True,
         help_text="Raw binary data for the processed image"
     )
+    transcript_available = models.BooleanField(
+        default=False,
+        help_text="Whether a transcript is available for this device"
+    )
+    transcript = models.TextField(
+        blank=True,
+        null=True,
+        help_text="The transcribed text"
+    )
     created_at = models.DateTimeField(
         auto_now_add=True,
         help_text="When the device image record was created"
