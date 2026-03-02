@@ -13,6 +13,71 @@ logger = logging.getLogger(__name__)
 # Load environment variables from .env file
 load_dotenv()
 
+# Flag to enable/disable AI-based subject classification
+USE_AI_CLASSIFICATION = os.getenv('USE_AI_CLASSIFICATION', 'true').lower() == 'true'
+
+
+def classify_subject_with_ai(text_subject: str) -> str:
+    """
+    Use AI to classify the subject into a category for prompt optimization.
+    
+    Args:
+        text_subject: The transcribed text describing what to draw
+    
+    Returns:
+        str: Category - either 'text' or 'object'
+            - 'text': Single letters, numbers, greetings, text-based designs
+            - 'object': Physical objects, animals, people, scenes
+    """
+    try:
+        from google import genai
+        
+        api_key = os.getenv('GOOGLE_API_KEY')
+        if not api_key:
+            logger.warning("GOOGLE_API_KEY not set, defaulting to 'object' category")
+            return 'object'
+        
+        client = genai.Client(api_key=api_key)
+        
+        classification_prompt = (
+            f"Classify this drawing request into ONE category:\n"
+            f"Request: '{text_subject}'\n\n"
+            f"Categories:\n"
+            f"- 'text': Single letters (A-Z), numbers (0-9), greetings (Happy Birthday, Congratulations), "
+            f"text-based designs, or requests to draw text/letters/numbers\n"
+            f"- 'object': Physical objects, animals, people, vehicles, food, scenes, or anything drawable as an illustration\n\n"
+            f"Respond with ONLY ONE WORD: either 'text' or 'object'"
+        )
+        
+        # Use a fast text model for classification (not image generation)
+        classification_model = os.getenv('GEMINI_TEXT_MODEL', 'gemini-2.0-flash')
+        
+        logger.info(f"🔍 Classifying subject with AI using {classification_model}")
+        start_time = datetime.utcnow()
+        
+        response = client.models.generate_content(
+            model=classification_model,
+            contents=[classification_prompt]
+        )
+        
+        end_time = datetime.utcnow()
+        duration = (end_time - start_time).total_seconds()
+        
+        # Extract the classification from response
+        classification = response.text.strip().lower()
+        
+        # Validate response
+        if classification not in ['text', 'object']:
+            logger.warning(f"Invalid AI classification response: '{classification}', defaulting to 'object'")
+            classification = 'object'
+        
+        logger.info(f"✅ AI classified '{text_subject}' as '{classification}' in {duration:.2f}s")
+        return classification
+        
+    except Exception as e:
+        logger.error(f"Error in AI classification: {e}, defaulting to 'object'")
+        return 'object'
+
 
 def create_and_save_image(text_subject: str, output_dir: str = None, model_name: str = None) -> tuple:
     """
@@ -36,79 +101,64 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
     try:
         # Import the new Google GenAI SDK
         from google import genai
+        logger.info(f"⏱️  [TIMING] Starting image generation for subject: {text_subject}")
         
-        logger.info(f"Starting image generation for subject: {text_subject}")
+        # Record overall start time
+        overall_start_time = datetime.utcnow()
         
-        # Record API call start time
-        api_start_time = datetime.utcnow()
+        # Record classification start time
+        classification_start_time = datetime.utcnow()
         
-        # Prepare the image generation prompt
-        # image_generation_prompt = (
-        #     f"A cheerful, kid-friendly cartoon-style **pure black line art drawing** of a {text_subject}. "
-        #     "**Subject is large and fills the canvas well**, with an expressive face, varied hairstyles, and dynamic pose. "
-        #     "**Bold, clean outlines on a stark white background**, resembling a simple coloring book page. "
-        #     "Includes basic, engaging background elements like grass, sky, and playful sports equipment, framed to enhance the main subject. "
-        #     "Details suitable for kids. Pixel dimensions: **685px width, 913px height (3:4 aspect ratio)**. "
-        #     "**No grayscale, no shading, no color fill whatsoever.**"
-        # )
+        # Analyze the subject to determine the appropriate prompt type
+        if USE_AI_CLASSIFICATION:
+            # Use AI to classify the subject
+            category = classify_subject_with_ai(text_subject)
+            is_text_based = (category == 'text')
+        else:
+            # Default to object-based (non-text) when AI classification is disabled
+            # This ensures we always generate illustrations unless AI explicitly says it's text
+            is_text_based = False
+            logger.info(f"AI classification disabled, defaulting to 'object' category")
         
-        # negative_prompt = (
-        #     "color, grayscale, shading, shadows, gradients, textures, photorealistic, 3D, complex, "
-        #     "ugly, disfigured, scary, boring, dull, muted, abstract, text, signature, watermark, logo, "
-        #     "multiple subjects, small subject, too much white space, empty background"
-        # )
-        # Detect if this is a text-based greeting/message (no clear physical subject)
-        text_keywords = ['happy', 'congratulations', 'welcome', 'birthday', 'diwali', 'christmas', 
-                        'new year', 'thank you', 'good luck', 'best wishes', 'celebration']
-        is_text_greeting = any(keyword in text_subject.lower() for keyword in text_keywords)
+        classification_end_time = datetime.utcnow()
+        classification_duration = (classification_end_time - classification_start_time).total_seconds()
+        logger.info(f"⏱️  [TIMING] Subject classification completed in {classification_duration:.2f}s")
         
-        if is_text_greeting:
-            # For greetings/messages: create bold decorative text with themed background
-            image_generation_prompt = (
-                f"A bold, high-contrast black and white decorative design featuring the text: '{text_subject}'. "
-                "Large, bold, decorative hand-lettered text fills 50-60% of the center with thick outlines (4-6px width). "
-                "Text style: playful, bubbly, kid-friendly font with decorative flourishes. "
-                "IMPORTANT: Include a COMPLETE themed background scene that fills the ENTIRE image from edge to edge, "
-                "related to the message theme: "
-                "if Diwali - diyas, rangoli patterns, fireworks, decorative lamps, stars; "
-                "if Christmas - trees, ornaments, snowflakes, gifts, bells, stars; "
-                "if Birthday - balloons, confetti, cake, candles, party hats, streamers; "
-                "if celebration - fireworks, stars, confetti, balloons, decorative elements; "
-                "if nature theme - flowers, leaves, vines, butterflies, clouds, sun. "
-                "Background decorative elements should fill 100% of the frame around the text. "
-                "Each element has its own outline, but NO border or frame around the entire image. "
-                "Pure black lines on white fill only - no grayscale, no shading, no gradients, no color. "
-                "Clean vector-style coloring book aesthetic with bold, simplified shapes suitable for thermal printing. "
-                "Composition: 3:4 aspect ratio (685x913px)."
+        # Build the prompt based on the case
+        if is_text_based:
+            # Case 1: Decorative text/lettering
+            case_specific_rule = (
+                f"Large, bold, decorative lettering of what is requested in this message '{text_subject}' fills 60-70% of canvas. "
+                "Playful, bubbly font with decorative flourishes. "
+                "Themed background elements (balloons, stars, confetti, flowers) fill entire frame edge to edge."
             )
         else:
-            # For object-based subjects: create scene with main subject
-            image_generation_prompt = (
-                f"A bold, high-contrast black and white illustration of: {text_subject}. "
-                "Kid-friendly cartoon style with thick, chunky black outlines (3-5px width) around each individual object and solid white fill areas. "
-                "Main subject is large and centered, filling 60-70% of the frame with an expressive, cheerful appearance. "
-                "IMPORTANT: Include a COMPLETE contextual background scene that fills the ENTIRE image from edge to edge: "
-                "if playing/sports - full playground scene with ground, sky, clouds, other kids playing, equipment, grass, sun; "
-                "if animal - complete natural habitat with ground/grass, trees, bushes, clouds, sky, flowers, other small animals; "
-                "if food - full kitchen or dining scene with table, plates, utensils, windows, decorations; "
-                "if vehicle - complete road/street scene with buildings, trees, clouds, road markings, traffic signs, landscape; "
-                "if character/person - full environment scene with ground, buildings or nature, sky with clouds or sun. "
-                "Background should fill 100% of the frame with simplified line art elements creating a complete scene. "
-                "Layer the scene: foreground (main subject), middle ground (related objects), background (sky, clouds, distant elements). "
-                "Each object has its own outline, but NO border or frame around the entire image - the scene extends to all edges. "
-                "Pure black lines on white fill only - no grayscale, no shading, no gradients, no color. "
-                "Clean vector-style coloring book aesthetic with bold, simplified shapes suitable for thermal printing. "
-                "Composition: 3:4 aspect ratio (685x913px), front-facing or 3/4 view angle for consistency."
+            # Case 2: Physical object/scene with contextual background
+            case_specific_rule = (
+                f"Main subject '{text_subject}' large and centered, filling 60-70% of frame. "
+                "Complete contextual background fills ENTIRE image edge to edge: "
+                "animals get habitat (ground, trees, sky, flowers); "
+                "vehicles get road scene (buildings, clouds, signs); "
+                "food gets kitchen/dining (table, utensils); "
+                "people get full environment (ground, buildings/nature, sky). "
+                "Layer: foreground (subject), middle ground (related objects), background (sky, clouds)."
             )
-
+        
+        # Always-applied rules (consistent across all cases)
+        always_rules = (
+            "Kid-friendly cartoon style. Thick black outlines (3-5px). Solid white fill. "
+            "Pure black and white only - no grayscale, shading, gradients, or color. "
+            "Clean coloring book aesthetic. No border around image - scene extends to edges. "
+            "3:4 aspect ratio (685x913px)."
+        )
+        
+        # Combine into final prompt
+        image_generation_prompt = f"{case_specific_rule} {always_rules}"
+        
         negative_prompt = (
-            "color, colored, grayscale, gray tones, shading, shadows, gradients, soft edges, blur, "
-            "photorealistic, 3D render, realistic textures, detailed textures, crosshatching, stippling, "
-            "thin lines, sketchy lines, messy lines, dithered patterns, halftone dots, "
-            "low contrast, faded, washed out, complex details, intricate patterns, "
-            "scary, ugly, disfigured, distorted, too many subjects, overcrowded, cluttered, "
-            "empty background, plain white background, blank background, too much white space, subject too small, "
-            "border around image, frame around sticker, outer border, rectangular border, edge border, sticker outline"
+            "color, grayscale, shading, gradients, blur, photorealistic, 3D, "
+            "thin lines, sketchy, dithered, low contrast, complex details, "
+            "ugly, distorted, overcrowded, empty background, subject too small, border around image"
         )
         # Use specified model or get from environment or default
         if model_name is None:
@@ -121,12 +171,18 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
         if not api_key:
             raise Exception("GOOGLE_API_KEY environment variable is not set")
         
+        client_init_start = datetime.utcnow()
         client = genai.Client(api_key=api_key)
+        client_init_end = datetime.utcnow()
+        client_init_duration = (client_init_end - client_init_start).total_seconds()
+        logger.info(f"⏱️  [TIMING] Gemini client initialization: {client_init_duration:.2f}s")
         
         # Create the full prompt with negative examples
         full_prompt = f"{image_generation_prompt}\n\nNegative: {negative_prompt}"
         
-        logger.info("Sending prompt to Gemini API for image generation")
+        logger.info(f"⏱️  [TIMING] Sending prompt to Gemini API for image generation")
+        api_call_start = datetime.utcnow()
+        
         response = client.models.generate_content(
             model=model_name,
             contents=[full_prompt],
@@ -134,8 +190,9 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
         
         # Record API call end time
         api_end_time = datetime.utcnow()
-        api_duration = (api_end_time - api_start_time).total_seconds()
-        logger.info(f"Gemini API call completed in {api_duration:.2f}s")
+        api_duration = (api_end_time - api_call_start).total_seconds()
+        total_api_duration = (api_end_time - client_init_start).total_seconds()
+        logger.info(f"⏱️  [TIMING] Gemini API call completed in {api_duration:.2f}s (total with init: {total_api_duration:.2f}s)")
         
         # Record image processing start time
         processing_start_time = datetime.utcnow()
@@ -163,7 +220,7 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
         # Record image processing end time
         processing_end_time = datetime.utcnow()
         processing_duration = (processing_end_time - processing_start_time).total_seconds()
-        logger.info(f"Image data extraction completed in {processing_duration:.2f}s")
+        logger.info(f"⏱️  [TIMING] Image data extraction completed in {processing_duration:.2f}s")
         
         # Record file save start time
         save_start_time = datetime.utcnow()
@@ -183,12 +240,18 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
         
         # Load image with PIL to scale it down
         # Open the image from bytes
+        pil_load_start = datetime.utcnow()
         original_image = Image.open(io.BytesIO(image_data))
+        pil_load_end = datetime.utcnow()
+        pil_load_duration = (pil_load_end - pil_load_start).total_seconds()
+        
         original_size = len(image_data)
         logger.info(f"Original image size: {original_image.size}, file size: {original_size / 1024:.2f} KB")
+        logger.info(f"⏱️  [TIMING] PIL image load: {pil_load_duration:.2f}s")
         
         # Scale down the image to reduce file size while maintaining aspect ratio
         # Target max dimension of 600px (ideal for 58mm thermal printer)
+        resize_start = datetime.utcnow()
         max_dimension = 600
         width, height = original_image.size
         
@@ -205,8 +268,13 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
             scaled_image = original_image
             logger.info("Image already within size limits, no scaling needed")
         
+        resize_end = datetime.utcnow()
+        resize_duration = (resize_end - resize_start).total_seconds()
+        logger.info(f"⏱️  [TIMING] Image resize: {resize_duration:.2f}s")
+        
         # Convert to grayscale for black/white line art (reduces file size significantly)
         # 'L' mode = 8-bit grayscale, perfect for thermal printer output
+        convert_start = datetime.utcnow()
         grayscale_image = scaled_image.convert('L')
         logger.info(f"Converted to grayscale mode for optimal thermal printing")
         
@@ -215,11 +283,17 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
         data = list(grayscale_image.getdata())
         image_without_exif = Image.new('L', grayscale_image.size)
         image_without_exif.putdata(data)
+        convert_end = datetime.utcnow()
+        convert_duration = (convert_end - convert_start).total_seconds()
+        logger.info(f"⏱️  [TIMING] Grayscale conversion & metadata strip: {convert_duration:.2f}s")
         
         # Save with maximum PNG compression while maintaining quality
         # compress_level=9 provides maximum compression (0-9 scale)
         # optimize=True enables additional compression passes
+        png_save_start = datetime.utcnow()
         image_without_exif.save(image_path, 'PNG', optimize=True, compress_level=9)
+        png_save_end = datetime.utcnow()
+        png_save_duration = (png_save_end - png_save_start).total_seconds()
         
         # Get final file size
         final_size = os.path.getsize(image_path)
@@ -231,7 +305,8 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
         
         logger.info(f"Saved scaled image to: {image_path}")
         logger.info(f"Final file size: {final_size / 1024:.2f} KB (reduced by {compression_ratio:.1f}%)")
-        logger.info(f"File save completed in {save_duration:.2f}s")
+        logger.info(f"⏱️  [TIMING] PNG save with compression: {png_save_duration:.2f}s")
+        logger.info(f"⏱️  [TIMING] Total file save operations: {save_duration:.2f}s")
         
         # Generate raw image data for printer
         raw_start_time = datetime.utcnow()
@@ -239,10 +314,22 @@ def create_and_save_image(text_subject: str, output_dir: str = None, model_name:
         raw_end_time = datetime.utcnow()
         raw_duration = (raw_end_time - raw_start_time).total_seconds()
         
+        # Calculate overall duration
+        overall_end_time = datetime.utcnow()
+        total_duration = (overall_end_time - overall_start_time).total_seconds()
+        
         # Log detailed breakdown
-        total_duration = (raw_end_time - api_start_time).total_seconds()
-        logger.info(f"Raw image processing completed in {raw_duration:.2f}s")
-        logger.info(f"Image generation breakdown - API: {api_duration:.2f}s, Processing: {processing_duration:.2f}s, Save: {save_duration:.2f}s, Raw: {raw_duration:.2f}s, Total: {total_duration:.2f}s")
+        logger.info(f"⏱️  [TIMING] Raw image processing completed in {raw_duration:.2f}s")
+        logger.info(f"⏱️  [TIMING] ═══════════════════════════════════════════════════════")
+        logger.info(f"⏱️  [TIMING] 📊 IMAGE GENERATION BREAKDOWN:")
+        logger.info(f"⏱️  [TIMING]   • Classification:       {classification_duration:6.2f}s ({(classification_duration/total_duration)*100:5.1f}%)")
+        logger.info(f"⏱️  [TIMING]   • Gemini API call:      {total_api_duration:6.2f}s ({(total_api_duration/total_duration)*100:5.1f}%)")
+        logger.info(f"⏱️  [TIMING]   • Image extraction:     {processing_duration:6.2f}s ({(processing_duration/total_duration)*100:5.1f}%)")
+        logger.info(f"⏱️  [TIMING]   • File save operations: {save_duration:6.2f}s ({(save_duration/total_duration)*100:5.1f}%)")
+        logger.info(f"⏱️  [TIMING]   • Raw data generation:  {raw_duration:6.2f}s ({(raw_duration/total_duration)*100:5.1f}%)")
+        logger.info(f"⏱️  [TIMING]   ─────────────────────────────────────────────────")
+        logger.info(f"⏱️  [TIMING]   ⭐ TOTAL:               {total_duration:6.2f}s (100.0%)")
+        logger.info(f"⏱️  [TIMING] ═══════════════════════════════════════════════════════")
         
         return str(image_path), image_raw_data
     

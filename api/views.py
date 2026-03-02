@@ -1180,7 +1180,8 @@ def get_device_image_raw(request, device_id):
     from .models import DeviceImage
     
     try:
-        logger.info(f"Getting raw image data for device_id: {device_id}")
+        request_start = datetime.now()
+        logger.info(f"⏱️  [TIMING] Getting raw image data for device_id: {device_id}")
         
         try:
             device_image = DeviceImage.objects.get(device_id=device_id)
@@ -1211,32 +1212,44 @@ def get_device_image_raw(request, device_id):
         invert_flag = invert_param.lower() in ('1', 'true', 'yes')
         
         # Use stored raw data (stored data is now NON-inverted by default)
+        data_fetch_start = datetime.now()
         image_raw = device_image.image_raw
+        data_fetch_duration = (datetime.now() - data_fetch_start).total_seconds()
+        logger.info(f"⏱️  [TIMING] Database fetch: {data_fetch_duration:.3f}s")
         
         # The stored raw data is NOT inverted (invert=False during generation)
         # If user wants inverted (invert=1, the default), we need to flip all bits
         if invert_flag:
+            invert_start = datetime.now()
             # Flip all bits: 0->1, 1->0
             from .image_utils import flip_bits
             image_raw = flip_bits(image_raw)
-            logger.info(f"Applied bit inversion for device {device_id}")
+            invert_duration = (datetime.now() - invert_start).total_seconds()
+            logger.info(f"⏱️  [TIMING] Bit inversion: {invert_duration:.3f}s")
         
         # Optionally wrap the raw bytes into the printer command stream
         wrap_param = request.GET.get('wrap', '0')
         wrap_flag = wrap_param.lower() in ('1', 'true', 'yes')
         if wrap_flag:
+            wrap_start = datetime.now()
             energy_param = request.GET.get('energy')
             try:
                 energy = int(energy_param, 0) if energy_param is not None else 0xffff
             except Exception:
                 energy = 0xffff
             wrapped = wrap_raw_bytes_with_print_commands(image_raw, energy=energy)
+            wrap_duration = (datetime.now() - wrap_start).total_seconds()
+            logger.info(f"⏱️  [TIMING] Printer command wrapping: {wrap_duration:.3f}s")
+            
             buf = io.BytesIO(bytes(wrapped))
             buf.seek(0)
             resp = FileResponse(buf, content_type='application/octet-stream')
             resp['Content-Length'] = str(len(wrapped))
             resp['X-Printer-Wrapped'] = '1'
             resp['X-Device-ID'] = device_id
+            
+            total_duration = (datetime.now() - request_start).total_seconds()
+            logger.info(f"⏱️  [TIMING] ⭐ Total request time (wrapped): {total_duration:.3f}s")
             return resp
         
         buf = io.BytesIO(image_raw)
@@ -1244,6 +1257,9 @@ def get_device_image_raw(request, device_id):
         resp = FileResponse(buf, content_type='application/octet-stream')
         resp['Content-Length'] = str(len(image_raw))
         resp['X-Device-ID'] = device_id
+        
+        total_duration = (datetime.now() - request_start).total_seconds()
+        logger.info(f"⏱️  [TIMING] ⭐ Total request time: {total_duration:.3f}s")
         return resp
     
     except Exception as e:

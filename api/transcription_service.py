@@ -65,7 +65,7 @@ def transcribe_audio_file(audio_file_path: str, transaction_uuid: str):
         except Exception:
             logger.exception('Error checking assemblyai.settings.api_key')
         
-        logger.info(f"Starting transcription for UUID: {transaction_uuid}")
+        logger.info(f"⏱️  [TIMING] Starting transcription for UUID: {transaction_uuid}")
         
         # Record transcription start time
         transcription_start_time = timezone.now()
@@ -77,16 +77,23 @@ def transcribe_audio_file(audio_file_path: str, transaction_uuid: str):
         
         # Configure transcription settings
         config = aai.TranscriptionConfig(
-            speech_model=aai.SpeechModel.best
+            speech_model=aai.SpeechModel.slam_1
         )
         
         # Create transcriber and transcribe
+        logger.info(f"⏱️  [TIMING] Calling AssemblyAI API for {transaction_uuid}")
+        api_call_start = timezone.now()
+        
         transcriber = aai.Transcriber(config=config)
         transcript = transcriber.transcribe(audio_file_path)
         
+        api_call_end = timezone.now()
+        api_call_duration = (api_call_end - api_call_start).total_seconds()
+        logger.info(f"⏱️  [TIMING] AssemblyAI API call completed in {api_call_duration:.2f}s")
+        
         # Check transcription result
         if transcript.status == aai.TranscriptStatus.error:
-            logger.error(f"Transcription failed for {transaction_uuid}: {transcript.error}")
+            logger.error(f"❌ Transcription failed for {transaction_uuid}: {transcript.error}")
             transcription.status = 'failed'
             transcription.error_message = str(transcript.error)
             transcription.save()
@@ -95,8 +102,9 @@ def transcribe_audio_file(audio_file_path: str, transaction_uuid: str):
             transcription_end_time = timezone.now()
             transcription_duration = (transcription_end_time - transcription_start_time).total_seconds()
             
-            logger.info(f"Transcription completed for {transaction_uuid}")
-            logger.info(f"Speech-to-text time for {transaction_uuid}: {transcription_duration:.2f}s")
+            logger.info(f"✅ Transcription completed for {transaction_uuid}")
+            logger.info(f"📝 Transcribed text: '{transcript.text}'")
+            logger.info(f"⏱️  [TIMING] Total speech-to-text time: {transcription_duration:.2f}s")
             
             transcription.status = 'completed'
             transcription.transcribed_text = transcript.text
@@ -149,7 +157,8 @@ def _generate_image_from_transcription(transcription, transcription_end_time=Non
         # Record image generation start time
         image_start_time = timezone.now()
         
-        logger.info(f"Starting image generation for transcription {transcription.uuid}")
+        logger.info(f"⏱️  [TIMING] Starting image generation for transcription {transcription.uuid}")
+        logger.info(f"📝 Transcribed text: '{transcription.transcribed_text}'")
         
         # Generate image with transcribed text as subject
         image_path, image_raw_data = create_and_save_image(transcription.transcribed_text)
@@ -157,13 +166,23 @@ def _generate_image_from_transcription(transcription, transcription_end_time=Non
         # Record image generation end time
         image_end_time = timezone.now()
         
+        # Record database save start time
+        db_save_start = timezone.now()
+        
         # Save image path and raw data to the transcription record
         transcription.image_path = image_path
         transcription.image_raw = image_raw_data
         transcription.save()
         
+        db_save_end = timezone.now()
+        db_save_duration = (db_save_end - db_save_start).total_seconds()
+        
+        logger.info(f"⏱️  [TIMING] Database save for transcription {transcription.uuid}: {db_save_duration:.2f}s")
+        
         # Update DeviceImage table if device_id is present
         if transcription.device_id:
+            device_update_start = timezone.now()
+            
             device_image, created = DeviceImage.objects.get_or_create(
                 device_id=transcription.device_id,
                 defaults={
@@ -183,25 +202,29 @@ def _generate_image_from_transcription(transcription, transcription_end_time=Non
                 device_image.transcript = transcription.transcribed_text
                 device_image.save()
             
-            logger.info(f"Updated DeviceImage for device_id: {transcription.device_id}")
+            device_update_end = timezone.now()
+            device_update_duration = (device_update_end - device_update_start).total_seconds()
+            
+            logger.info(f"⏱️  [TIMING] DeviceImage update for device_id {transcription.device_id}: {device_update_duration:.2f}s")
         
         # Calculate image generation time
         image_duration = (image_end_time - image_start_time).total_seconds()
         
-        logger.info(f"Image generation completed for {transcription.uuid}, saved to {image_path}")
-        logger.info(f"Text-to-image time for {transcription.uuid}: {image_duration:.2f}s")
+        logger.info(f"✅ Image generation completed for {transcription.uuid}, saved to {image_path}")
+        logger.info(f"⏱️  [TIMING] Text-to-image generation time: {image_duration:.2f}s")
         
         # Log total time from audio upload (created_at) to image saved
         try:
             if transcription.created_at:
                 total_elapsed = (image_end_time - transcription.created_at).total_seconds()
-                logger.info(f"Total time from audio upload to image stored for {transcription.uuid}: {total_elapsed:.2f}s")
+                logger.info(f"⏱️  [TIMING] ⭐ TOTAL TIME from audio upload to image stored: {total_elapsed:.2f}s")
                 
                 # Log breakdown if we have transcription end time
                 if transcription_end_time:
                     upload_to_transcription = (transcription_end_time - transcription.created_at).total_seconds()
                     transcription_to_image = (image_end_time - transcription_end_time).total_seconds()
-                    logger.info(f"Time breakdown for {transcription.uuid}: Upload→Transcription: {upload_to_transcription:.2f}s, Transcription→Image: {transcription_to_image:.2f}s")
+                    logger.info(f"⏱️  [TIMING] Breakdown - Upload→Transcription: {upload_to_transcription:.2f}s, Transcription→Image: {transcription_to_image:.2f}s")
+                    logger.info(f"⏱️  [TIMING] Percentage - Transcription: {(upload_to_transcription/total_elapsed)*100:.1f}%, Image: {(transcription_to_image/total_elapsed)*100:.1f}%")
         except Exception:
             logger.exception("Failed to compute elapsed time for image generation")
         
